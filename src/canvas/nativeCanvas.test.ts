@@ -78,7 +78,7 @@ describe('native pair-paint canvas', () => {
     await vi.runAllTimersAsync()
     await movement
 
-    expect(canvas.getSnapshot().agentPresence).toEqual({
+    expect(canvas.getSnapshot().agentPresence).toMatchObject({
       x: 650,
       y: 440,
       label: 'Painting Fox body',
@@ -122,5 +122,15 @@ describe('native pair-paint canvas', () => {
 
     expect(watchingTab.getSnapshot().fills.moon).toEqual({ color: '#f0b343', origin: 'agent' })
     expect(watchingTab.getSnapshot().agentPresence?.label).toBe('WebMCP • Balances the cool river')
+  })
+
+  it('expires a disconnected agent presence lease', () => {
+    const canvas = createNativeCanvasPort()
+    canvas.showAgentPresence('ChatGPT joined through WebMCP')
+
+    vi.advanceTimersByTime(6001)
+    canvas.expireAgentPresence(6000)
+
+    expect(canvas.getSnapshot().agentPresence).toBeNull()
   })
 })

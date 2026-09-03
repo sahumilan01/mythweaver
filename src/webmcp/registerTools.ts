@@ -85,6 +85,7 @@ interface RegisterToolsOptions {
     canMove(participant: SessionParticipant): boolean
     noteMove(participant: SessionParticipant): boolean
     finish(): void
+    resume(): void
   }
   onAgentActivity?: (message: string) => void
   onAgentJoined?: (participant: 'agent' | 'agent-two') => void
@@ -445,6 +446,7 @@ export function registerMythWeaverTools({
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: () => {
       const undone = canvas.undoLast('agent')
+      if (undone) turnSession?.resume()
       onAgentActivity?.(undone ? 'ChatGPT undid its last paint move.' : 'ChatGPT had no paint move to undo.')
       return undone
         ? success('Undid ChatGPT’s last paint move.', { world: canvas.readWorld() })
@@ -460,6 +462,9 @@ export function registerMythWeaverTools({
     annotations: { destructiveHint: true },
     execute: () => {
       canvas.clearPaint('agent')
+      const artifacts = canvas.readWorld().artifacts
+      const hasOpenRegion = Array.isArray(artifacts) && artifacts.some((artifact) => !object(artifact).fill)
+      if (hasOpenRegion) turnSession?.resume()
       onAgentActivity?.('ChatGPT cleared its paint. Your paint stayed untouched.')
       return success('Cleared ChatGPT paint and preserved the person’s work.', { world: canvas.readWorld() })
     },

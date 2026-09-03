@@ -18,7 +18,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
+import { createNativeCanvasPort, NativeStoryCanvas, type AgentId } from '../canvas/nativeCanvas'
 import { chooseNextSectionFill } from '../canvas/paintingModel'
 import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant, type TurnSessionState } from '../session/turnSession'
 import {
@@ -103,9 +103,13 @@ export function App() {
   const canvasState = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
   const turnState = useSyncExternalStore(turnSession.subscribe, turnSession.getState, turnSession.getState)
   const agentConnected = Boolean(canvasState.agentPresence || canvasState.agentTwoPresence)
-  const visibleAgentActivity = canvasState.agentPresence?.label ?? canvasState.agentTwoPresence?.label ?? agentActivity
+  const latestPresence = [canvasState.agentPresence, canvasState.agentTwoPresence]
+    .filter((presence) => presence !== null)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0]
+  const visibleAgentActivity = latestPresence?.label ?? agentActivity
   const webMcpReady = webMcpStatus === 'ready'
   const applyingRemoteSession = useRef(false)
+  const hostedAgents = useRef(new Set<AgentId>())
 
   useEffect(() => {
     setShareUrl(`${window.location.origin}${window.location.pathname}`)
@@ -156,6 +160,21 @@ export function App() {
   }, [canvas, story, turnSession])
 
   useEffect(() => {
+    const refreshPresence = () => hostedAgents.current.forEach((agentId) => canvas.refreshAgentPresence(agentId))
+    const expirePresence = () => canvas.expireAgentPresence(6000)
+    const disconnect = () => hostedAgents.current.forEach((agentId) => canvas.hideAgentPresence(agentId))
+    const heartbeatTimer = window.setInterval(refreshPresence, 2000)
+    const expiryTimer = window.setInterval(expirePresence, 1000)
+    window.addEventListener('pagehide', disconnect)
+    return () => {
+      window.clearInterval(heartbeatTimer)
+      window.clearInterval(expiryTimer)
+      window.removeEventListener('pagehide', disconnect)
+      disconnect()
+    }
+  }, [canvas])
+
+  useEffect(() => {
     let disposeTools: (() => void) | undefined
     let retryTimer: number | undefined
     let attempts = 0
@@ -178,7 +197,8 @@ export function App() {
         canvas,
         turnSession,
         onAgentActivity: setAgentActivity,
-        onAgentJoined: () => {
+        onAgentJoined: (participant) => {
+          hostedAgents.current.add(participant)
           setAgentRequested(false)
           setGuideOpen(false)
         },
@@ -314,8 +334,8 @@ export function App() {
         </div>
 
         <div className="header-actions">
-          {!canvasState.agentPresence && (
-            <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()}>
+          {!agentConnected && (
+            <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()} aria-label={agentRequested ? 'Agent invite copied' : 'Connect your agent'}>
               <UserPlus weight="bold" aria-hidden="true" />
               <span>{agentRequested ? 'Agent link copied' : 'Connect your agent'}</span>
             </button>

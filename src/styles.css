@@ -1305,6 +1305,8 @@ button:disabled {
   display: grid;
   place-items: center;
   padding: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(17, 25, 57, 0.46);
   backdrop-filter: blur(7px);
 }
@@ -1683,6 +1685,12 @@ button:disabled {
 
   .invite-agent-button span {
     display: none;
+  }
+}
+
+@media (max-height: 720px) {
+  .welcome-backdrop {
+    place-items: start center;
   }
 }
 

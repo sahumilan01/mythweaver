@@ -56,4 +56,14 @@ describe('turn session', () => {
       finished: false,
     })
   })
+
+  it('resumes the current participant after an undo reopens the canvas', () => {
+    const session = createTurnSessionStore('agent-show')
+    session.finish()
+
+    session.resume()
+
+    expect(session.getState()).toMatchObject({ active: 'agent', finished: false })
+    expect(session.canMove('agent')).toBe(true)
+  })
 })

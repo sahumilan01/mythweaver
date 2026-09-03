@@ -17,6 +17,7 @@ export interface TurnSessionStore {
   canMove(participant: SessionParticipant): boolean
   noteMove(participant: SessionParticipant): boolean
   finish(): void
+  resume(): void
   restore(next: TurnSessionState): void
 }
 
@@ -104,6 +105,9 @@ export function createTurnSessionStore(initial: SessionMode | TurnSessionState =
     },
     finish() {
       publish({ ...state, finished: true })
+    },
+    resume() {
+      if (state.finished) publish({ ...state, finished: false })
     },
     restore(next) {
       if (!(next.mode in SESSION_MODES)) return

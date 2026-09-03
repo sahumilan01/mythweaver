@@ -203,6 +203,19 @@ describe('MythWeaver WebMCP tools', () => {
     expect(tools.has('add_canvas_stroke')).toBe(false)
   })
 
+  it('reopens a finished session after undoing or clearing agent paint', async () => {
+    const session = createTurnSessionStore('agent-show')
+    const { tools } = createHarness(session)
+    session.finish()
+
+    await tools.get('undo_agent_paint')!.execute({})
+    expect(session.getState().finished).toBe(false)
+
+    session.finish()
+    await tools.get('clear_agent_paint')!.execute({})
+    expect(session.getState().finished).toBe(false)
+  })
+
   it('rejects a stale proposal before drawing anything on the canvas', async () => {
     const { tools, renderProposal } = createHarness()
 

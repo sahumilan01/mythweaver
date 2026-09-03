@@ -15,7 +15,7 @@ const VIEWBOX_HEIGHT = 700
 export type PaintOrigin = 'human' | 'agent' | 'agent-two'
 export type AgentId = 'agent' | 'agent-two'
 export type PaintPoint = { x: number; y: number }
-export type AgentPresence = { x: number; y: number; label: string }
+export type AgentPresence = { x: number; y: number; label: string; updatedAt: number }
 
 export const PAINT_REGIONS = [
   { id: 'hill', label: 'Moonlit hill', d: 'M0 515 C180 430 345 485 515 470 C720 450 890 390 1200 470 L1200 700 L0 700 Z' },
@@ -71,6 +71,9 @@ export interface NativeCanvasPort extends CanvasPort {
   getServerSnapshot(): CanvasSnapshot
   setPreviewHandler(handler: (beats: StoryBeat[]) => void): void
   showAgentPresence(label: string, agentId?: AgentId): void
+  refreshAgentPresence(agentId?: AgentId): void
+  hideAgentPresence(agentId?: AgentId): void
+  expireAgentPresence(maxAgeMs: number): void
   moveAgentCursor(point: PaintPoint, label: string, agentId?: AgentId): Promise<void>
   moveAgentToRegion(regionId: string, label: string, agentId?: AgentId): Promise<void>
 }
@@ -90,8 +93,8 @@ const parseStoredSnapshot = (raw: string | null, includeLivePresence = false): C
       lastAction: !removedFreehandMarks && (value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two')
         ? value.lastAction
         : null,
-      agentPresence: includeLivePresence && value.agentPresence && typeof value.agentPresence === 'object' ? value.agentPresence : null,
-      agentTwoPresence: includeLivePresence && value.agentTwoPresence && typeof value.agentTwoPresence === 'object' ? value.agentTwoPresence : null,
+      agentPresence: includeLivePresence && value.agentPresence && typeof value.agentPresence.updatedAt === 'number' ? value.agentPresence : null,
+      agentTwoPresence: includeLivePresence && value.agentTwoPresence && typeof value.agentTwoPresence.updatedAt === 'number' ? value.agentTwoPresence : null,
     }
   } catch {
     return EMPTY_SNAPSHOT
@@ -160,10 +163,10 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       focusedIds: [region.id],
       lastAction: { origin, label: `${originName(origin)} colored ${region.label}` },
       agentPresence: origin === 'agent' && snapshot.agentPresence
-        ? { ...snapshot.agentPresence, label: `Painted ${region.label}` }
+        ? { ...snapshot.agentPresence, label: `Painted ${region.label}`, updatedAt: Date.now() }
         : snapshot.agentPresence,
       agentTwoPresence: origin === 'agent-two' && snapshot.agentTwoPresence
-        ? { ...snapshot.agentTwoPresence, label: `Painted ${region.label}` }
+        ? { ...snapshot.agentTwoPresence, label: `Painted ${region.label}`, updatedAt: Date.now() }
         : snapshot.agentTwoPresence,
     })
     if (origin === 'human') announceHumanChange()
@@ -176,8 +179,8 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     publish({
       ...snapshot,
       [key]: current
-        ? { ...current, label }
-        : { x: agentId === 'agent' ? 1080 : 980, y: agentId === 'agent' ? 100 : 145, label },
+        ? { ...current, label, updatedAt: Date.now() }
+        : { x: agentId === 'agent' ? 1080 : 980, y: agentId === 'agent' ? 100 : 145, label, updatedAt: Date.now() },
     })
   }
 
@@ -193,6 +196,7 @@ export function createNativeCanvasPort(): NativeCanvasPort {
         x: Math.min(VIEWBOX_WIDTH - 80, Math.max(20, point.x)),
         y: Math.min(VIEWBOX_HEIGHT - 60, Math.max(20, point.y)),
         label,
+        updatedAt: Date.now(),
       },
     })
     const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -301,6 +305,23 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       previewHandler = handler
     },
     showAgentPresence,
+    refreshAgentPresence(agentId = 'agent') {
+      const key = agentId === 'agent' ? 'agentPresence' : 'agentTwoPresence'
+      const current = snapshot[key]
+      if (current) publish({ ...snapshot, [key]: { ...current, updatedAt: Date.now() } })
+    },
+    hideAgentPresence(agentId = 'agent') {
+      const key = agentId === 'agent' ? 'agentPresence' : 'agentTwoPresence'
+      if (snapshot[key]) publish({ ...snapshot, [key]: null })
+    },
+    expireAgentPresence(maxAgeMs) {
+      const now = Date.now()
+      const agentPresence = snapshot.agentPresence && now - snapshot.agentPresence.updatedAt <= maxAgeMs ? snapshot.agentPresence : null
+      const agentTwoPresence = snapshot.agentTwoPresence && now - snapshot.agentTwoPresence.updatedAt <= maxAgeMs ? snapshot.agentTwoPresence : null
+      if (agentPresence !== snapshot.agentPresence || agentTwoPresence !== snapshot.agentTwoPresence) {
+        publish({ ...snapshot, agentPresence, agentTwoPresence })
+      }
+    },
     moveAgentCursor,
     moveAgentToRegion(regionId, label, agentId = 'agent') {
       const region = PAINT_REGIONS.find((item) => item.id === regionId)
@@ -358,26 +379,55 @@ export function NativeStoryCanvas({ canvas, humanCanPaint = true }: { canvas: Na
         <rect className="native-canvas-paper" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} />
         {PAINT_REGIONS.map((region) => {
           const fill = snapshot.fills[region.id]
-          return <g key={region.id} className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : fill?.origin === 'agent-two' ? 'painted-by-agent-two' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}><path d={region.d} fill={fill?.color ?? '#fbfaf4'} onPointerDown={(event) => { event.stopPropagation(); if (humanCanPaint) canvas.paintRegion(region.id, color, 'human') }} /><title>{region.label}{fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : fill.origin === 'agent-two' ? 'Mica' : 'you'}` : ', uncolored'}</title></g>
+          const label = `${region.label}${fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : fill.origin === 'agent-two' ? 'Mica' : 'you'}` : ', uncolored'}`
+          const paint = () => {
+            if (humanCanPaint) canvas.paintRegion(region.id, color, 'human')
+          }
+          return (
+            <g
+              key={region.id}
+              className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : fill?.origin === 'agent-two' ? 'painted-by-agent-two' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}
+              role="button"
+              tabIndex={humanCanPaint ? 0 : -1}
+              aria-label={label}
+              aria-disabled={!humanCanPaint}
+              onPointerDown={(event) => { event.stopPropagation(); paint() }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  paint()
+                }
+              }}
+            >
+              <path d={region.d} fill={fill?.color ?? '#fbfaf4'} />
+              <title>{label}</title>
+            </g>
+          )
         })}
         <g className="fox-details" aria-hidden="true"><circle cx="615" cy="348" r="6" /><circle cx="682" cy="348" r="6" /><path d="M635 373 Q648 385 661 373" /></g>
         {snapshot.shapes.map((shape) => <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
-        {([['agent', snapshot.agentPresence], ['agent-two', snapshot.agentTwoPresence]] as const).map(([agentId, presence]) => presence && (
-          <g
-            key={agentId}
-            className={`agent-live-cursor ${agentId === 'agent-two' ? 'agent-two-cursor' : ''}`}
-            style={{ transform: `translate(${presence.x}px, ${presence.y}px)` }}
-            aria-label={`${agentId === 'agent' ? 'ChatGPT' : 'Mica'} cursor: ${presence.label}`}
-          >
-            <g className="agent-cursor-visual">
-              <path className="agent-cursor-arrow" d="M0 0 L5 31 L13 21 L22 34 L29 29 L19 17 L31 14 Z" />
-              <g className="agent-cursor-label" transform="translate(22 28)">
-                <rect x="0" y="0" width={Math.min(230, Math.max(108, presence.label.length * 7.1 + 26))} height="34" rx="9" />
-                <text x="13" y="22">{presence.label}</text>
+        {([['agent', snapshot.agentPresence], ['agent-two', snapshot.agentTwoPresence]] as const).map(([agentId, presence]) => {
+          if (!presence) return null
+          const label = presence.label.length > 38 ? `${presence.label.slice(0, 37)}…` : presence.label
+          const labelWidth = Math.min(230, Math.max(108, label.length * 7.1 + 26))
+          const labelX = presence.x > 850 ? -labelWidth - 14 : 22
+          return (
+            <g
+              key={agentId}
+              className={`agent-live-cursor ${agentId === 'agent-two' ? 'agent-two-cursor' : ''}`}
+              style={{ transform: `translate(${presence.x}px, ${presence.y}px)` }}
+              aria-label={`${agentId === 'agent' ? 'ChatGPT' : 'Mica'} cursor: ${presence.label}`}
+            >
+              <g className="agent-cursor-visual">
+                <path className="agent-cursor-arrow" d="M0 0 L5 31 L13 21 L22 34 L29 29 L19 17 L31 14 Z" />
+                <g className="agent-cursor-label" transform={`translate(${labelX} 28)`}>
+                  <rect x="0" y="0" width={labelWidth} height="34" rx="9" />
+                  <text x="13" y="22">{label}</text>
+                </g>
               </g>
             </g>
-          </g>
-        ))}
+          )
+        })}
       </svg>
       <div className="native-toolbar" aria-label="Painting tools">
         <span><PencilSimple weight="bold" aria-hidden="true" /> Paint</span>
