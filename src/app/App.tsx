@@ -12,7 +12,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
+import { createNativeCanvasPort, NativeStoryCanvas, PAINT_REGIONS } from '../canvas/nativeCanvas'
 import {
   createStoryStore,
   type StoryBeat,
@@ -116,14 +116,24 @@ export function App() {
     if (state.pending) return
     setGuideOpen(false)
     canvas.showAgentPresence('ChatGPT joined')
-    setAgentActivity('ChatGPT joined the canvas and is moving to the fox.')
+    const uncolored = PAINT_REGIONS.filter((region) => !canvas.getSnapshot().fills[region.id]).slice(0, 2)
+    setAgentActivity(uncolored.length > 0
+      ? `ChatGPT joined and is moving to ${uncolored[0].label}.`
+      : 'ChatGPT joined and is finding an open place to draw.')
     void (async () => {
-      await canvas.moveAgentToRegion('fox-body', 'Painting Fox body')
-      canvas.paintRegion('fox-body', '#d9513f', 'agent')
-      setAgentActivity('ChatGPT colored the fox body coral. It is moving to the river.')
-      await canvas.moveAgentToRegion('river', 'Painting Winding river')
-      canvas.paintRegion('river', '#263f98', 'agent')
-      setAgentActivity('ChatGPT colored the river blue. You can keep painting at the same time.')
+      if (uncolored.length === 0) {
+        const points = [{ x: 910, y: 175 }, { x: 950, y: 145 }, { x: 990, y: 175 }]
+        await canvas.moveAgentCursor(points[0], 'Drawing in the open sky')
+        canvas.addPaintStroke(points, '#d9513f', 6, 'agent')
+        setAgentActivity('ChatGPT added a small coral mark in the open sky.')
+        return
+      }
+      const colors = ['#d9513f', '#247c63']
+      for (const [index, region] of uncolored.entries()) {
+        await canvas.moveAgentToRegion(region.id, `Painting ${region.label}`)
+        canvas.paintRegion(region.id, colors[index], 'agent')
+        setAgentActivity(`ChatGPT colored ${region.label}. ${index < uncolored.length - 1 ? 'It is choosing its next open region.' : 'Your turn, or keep painting alongside it.'}`)
+      }
     })()
   }
 
@@ -384,9 +394,9 @@ function TurnGuide({
         )}
         {isBuild && (
           <>
-            <button className="prompt-button" type="button" onClick={onCopy}>
-              <Copy weight="bold" aria-hidden="true" />
-              {copied ? 'Prompt copied' : 'Invite another move'}
+            <button className="prompt-button" type="button" onClick={onSample}>
+              <Robot weight="fill" aria-hidden="true" />
+              ChatGPT paints next
             </button>
             <button className="sample-button" type="button" onClick={onClose}>Keep painting</button>
           </>
