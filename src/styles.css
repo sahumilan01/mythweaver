@@ -276,6 +276,7 @@ button:focus-visible {
 
 .text-button,
 .primary-button,
+.invite-agent-button,
 .accept-button,
 .discard-button,
 .prompt-button,
@@ -293,6 +294,27 @@ button:focus-visible {
   padding: 0 14px;
   border-radius: 10px;
   white-space: nowrap;
+}
+
+.invite-agent-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 13px;
+  color: #f7f8ff;
+  border-radius: 10px;
+  background: var(--accent);
+  box-shadow: 0 5px 14px rgba(185, 58, 43, 0.2);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.invite-agent-button:hover {
+  background: var(--accent-strong);
+  transform: translateY(-1px);
 }
 
 .text-button {
@@ -1558,6 +1580,15 @@ button:disabled {
 
   .brand-lockup {
     flex: 0 0 auto;
+  }
+
+  .invite-agent-button {
+    width: 40px;
+    padding: 0;
+  }
+
+  .invite-agent-button span {
+    display: none;
   }
 }
 

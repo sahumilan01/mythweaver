@@ -8,11 +8,14 @@ import {
   Eye,
   Info,
   MoonStars,
+  PaintBucket,
+  Palette,
   PencilSimpleLine,
   Play,
   Robot,
   Sparkle,
   UsersThree,
+  UserPlus,
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -30,6 +33,7 @@ import { registerMythWeaverTools } from '../webmcp/registerTools'
 
 const STORY_STORAGE_KEY = 'mythweaver-story-state-v1'
 const SESSION_STORAGE_KEY = 'mythweaver-session-mode-v1'
+const ONBOARDING_STORAGE_KEY = 'mythweaver-onboarding-seen-v1'
 
 function loadSessionMode(): SessionMode {
   if (typeof window === 'undefined') return 'one-one'
@@ -73,6 +77,8 @@ export function App() {
   })
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
+  const [onboardingOpen, setOnboardingOpen] = useState(() => typeof window === 'undefined' || window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'true')
+  const [agentInvited, setAgentInvited] = useState(false)
   const [copied, setCopied] = useState(false)
   const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
@@ -133,7 +139,7 @@ export function App() {
   useEffect(() => {
     const participant = turnState.active
     if (participant === 'human' || turnState.finished || agentBusy.current) return
-    const autoplay = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo' || !webMcpReady
+    const autoplay = agentInvited
     if (!autoplay) return
     const move = chooseNextSectionFill(canvas.getSnapshot().fills, participant)
     const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
@@ -161,7 +167,7 @@ export function App() {
       setAgentActivity(`${agentName} colored ${move.label}.`)
       agentBusy.current = false
     })()
-  }, [canvas, canvasState.fills, turnSession, turnState, webMcpReady])
+  }, [agentInvited, canvas, canvasState.fills, turnSession, turnState])
 
   useEffect(() => {
     if (!playback || !canvas) return
@@ -181,9 +187,23 @@ export function App() {
     [state.contributions],
   )
 
+  const inviteAgent = () => {
+    setAgentInvited(true)
+    canvas.showAgentPresence('ChatGPT joined - waiting for you')
+    setAgentActivity('ChatGPT joined the canvas. Fill one section, then ChatGPT will take the next turn.')
+  }
+
+  const finishOnboarding = (invite: boolean) => {
+    window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
+    setOnboardingOpen(false)
+    setGuideOpen(false)
+    if (invite) inviteAgent()
+  }
+
   const stageSample = () => {
     if (state.pending) return
     setGuideOpen(false)
+    inviteAgent()
     turnSession.setMode('agent-show')
   }
 
@@ -242,6 +262,12 @@ export function App() {
         </div>
 
         <div className="header-actions">
+          {!canvasState.agentPresence && (
+            <button className="invite-agent-button" type="button" onClick={inviteAgent}>
+              <UserPlus weight="bold" aria-hidden="true" />
+              <span>Invite ChatGPT</span>
+            </button>
+          )}
           <div className="collaborator-presence" aria-label={canvasState.agentTwoPresence ? 'You, ChatGPT, and Mica are in the canvas' : canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
             <span className="collaborator-avatar human-avatar" title="You">You</span>
             {canvasState.agentPresence && (
@@ -263,13 +289,13 @@ export function App() {
             {!turnState.finished && turnState.movesRemaining > 1 && <i>{turnState.movesRemaining} moves</i>}
             <CaretDown weight="bold" aria-hidden="true" />
           </button>
-          <button
+          {canvasState.agentPresence && <button
             className="text-button"
             type="button"
             onClick={() => setGuideOpen(true)}
           >
             Guide
-          </button>
+          </button>}
           <button
             className="text-button advanced-button"
             type="button"
@@ -299,11 +325,11 @@ export function App() {
           <span><b>{turnState.finished ? 'Painting complete' : participantTurnLabel(turnState.active)}</b>{turnState.finished ? ' Pick a rule to start another round.' : `${turnState.movesRemaining} ${turnState.movesRemaining === 1 ? 'move' : 'moves'} before the brush passes.`}</span>
         </div>
 
-        {!guideOpen && phase === 'ask' && (
+        {!guideOpen && phase === 'ask' && !canvasState.agentPresence && (
           <aside className="pair-hint" aria-live="polite">
             <Robot weight="fill" aria-hidden="true" />
-            <span><b>Your move is live.</b> Now ask ChatGPT to paint the fox.</span>
-            <button type="button" onClick={() => setGuideOpen(true)}>Pair</button>
+            <span><b>Your section is filled.</b> Invite ChatGPT to take the next turn.</span>
+            <button type="button" onClick={inviteAgent}>Invite ChatGPT</button>
           </aside>
         )}
 
@@ -338,6 +364,7 @@ export function App() {
           <SessionRulesPanel
             current={turnState.mode}
             onChoose={(mode) => {
+              if (mode === 'agent-show' || mode === 'agent-duo') inviteAgent()
               turnSession.setMode(mode)
               setRulesOpen(false)
               setAgentActivity(`${SESSION_MODES[mode].label} started. ${participantTurnLabel(turnSession.getState().active)}.`)
@@ -354,8 +381,40 @@ export function App() {
             onStop={() => setPlayback(null)}
           />
         )}
+
+        {onboardingOpen && (
+          <FirstRunOnboarding
+            onInvite={() => finishOnboarding(true)}
+            onDismiss={() => finishOnboarding(false)}
+          />
+        )}
       </section>
     </main>
+  )
+}
+
+function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onDismiss: () => void }) {
+  return (
+    <div className="welcome-backdrop" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+      <section className="welcome-panel">
+        <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
+        <p className="welcome-kicker">Your first painting</p>
+        <h1 id="welcome-title">Color this page with ChatGPT</h1>
+        <p className="welcome-copy">You both make the same simple move. Pick a color, fill one outlined section, then pass the turn.</p>
+        <div className="consent-flow" aria-label="How pair painting works">
+          <span><Palette weight="fill" aria-hidden="true" /> Pick a color</span>
+          <span><PaintBucket weight="fill" aria-hidden="true" /> Fill one section</span>
+          <span><Robot weight="fill" aria-hidden="true" /> Pass the turn</span>
+        </div>
+        <div className="welcome-paths">
+          <button className="prompt-button" type="button" onClick={onInvite}>
+            <UserPlus weight="bold" aria-hidden="true" /> Invite ChatGPT and start
+          </button>
+          <button className="sample-button" type="button" onClick={onDismiss}>I’ll look around first</button>
+        </div>
+        <p className="support-note">ChatGPT appears beside you when it joins. Its cursor shows exactly which section it is coloring.</p>
+      </section>
+    </div>
   )
 }
 
