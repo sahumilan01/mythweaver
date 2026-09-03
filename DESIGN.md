@@ -20,6 +20,8 @@ The outlined scene always owns most of the viewport. The first-run guide contain
 
 ## Collaboration signals
 
+- Header avatars show who is currently in the canvas.
+- ChatGPT moves a coral, labeled cursor to a region before applying paint.
 - The activity strip names the latest actor and move.
 - Human fills keep the standard dark outline.
 - ChatGPT fills gain a coral outline; agent strokes are dashed.

@@ -7,6 +7,7 @@ MythWeaver is a live pair-painting canvas for a person and ChatGPT. It begins li
 - Human paint and ChatGPT paint appear immediately on one shared canvas.
 - Every region has a stable name, so an agent can paint the fox or river without guessing screen coordinates.
 - The activity strip says who changed what. ChatGPT paint also uses a coral outline.
+- Figma-style presence shows ChatGPT joining in the header and moving a labeled cursor to its next paint target.
 - Human undo affects human paint. Agent undo and clear affect agent paint only.
 - Low-risk, reversible paint moves happen live. Larger story additions remain proposals that only the person can keep or remove.
 - The native SVG canvas has no production license dependency and persists locally across reloads.

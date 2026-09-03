@@ -20,6 +20,9 @@ function createHarness() {
   const addPaintStroke = vi.fn(() => 'agent-stroke-1')
   const undoLast = vi.fn(() => true)
   const clearPaint = vi.fn()
+  const showAgentPresence = vi.fn()
+  const moveAgentCursor = vi.fn(async () => undefined)
+  const moveAgentToRegion = vi.fn(async () => undefined)
   const modelContext: ModelContextPort = {
     registerTool(tool) {
       tools.set(tool.name, tool)
@@ -32,6 +35,9 @@ function createHarness() {
     addPaintStroke,
     undoLast,
     clearPaint,
+    showAgentPresence,
+    moveAgentCursor,
+    moveAgentToRegion,
     renderProposal,
     clearProposal: () => undefined,
     replaceProposal: (_previous, proposal) =>
@@ -49,7 +55,7 @@ function createHarness() {
     canvas,
   })
 
-  return { tools, renderProposal, paintRegion, addPaintStroke, undoLast, clearPaint }
+  return { tools, renderProposal, paintRegion, addPaintStroke, undoLast, clearPaint, moveAgentToRegion }
 }
 
 describe('MythWeaver WebMCP tools', () => {
@@ -83,12 +89,14 @@ describe('MythWeaver WebMCP tools', () => {
   })
 
   it('lets the agent paint one named region immediately', async () => {
-    const { tools, paintRegion } = createHarness()
+    const { tools, paintRegion, moveAgentToRegion } = createHarness()
 
     const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
 
     expect(result.isError).not.toBe(true)
+    expect(moveAgentToRegion).toHaveBeenCalledWith('moon', 'Painting moon')
     expect(paintRegion).toHaveBeenCalledWith('moon', '#f0b343', 'agent')
+    expect(moveAgentToRegion.mock.invocationCallOrder[0]).toBeLessThan(paintRegion.mock.invocationCallOrder[0])
   })
 
   it('rejects malformed paint colors before touching the canvas', async () => {

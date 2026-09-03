@@ -39,4 +39,20 @@ describe('native pair-paint canvas', () => {
     expect(regions.find((region) => region.id === 'moon')?.fill?.origin).toBe('human')
     expect(regions.find((region) => region.id === 'river')?.fill).toBeNull()
   })
+
+  it('shows ChatGPT joining and moves its labeled cursor to the target region', async () => {
+    const canvas = createNativeCanvasPort()
+
+    const movement = canvas.moveAgentToRegion('fox-body', 'Painting Fox body')
+    expect(canvas.getSnapshot().agentPresence?.label).toBe('ChatGPT joined')
+
+    await vi.runAllTimersAsync()
+    await movement
+
+    expect(canvas.getSnapshot().agentPresence).toEqual({
+      x: 650,
+      y: 440,
+      label: 'Painting Fox body',
+    })
+  })
 })

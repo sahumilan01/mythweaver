@@ -74,6 +74,9 @@ export interface CanvasPort {
   clearProposal(proposal: StoryProposal): void
   focus(elementIds: string[]): string[]
   preview(beats: StoryBeat[]): void
+  showAgentPresence(label: string): void
+  moveAgentCursor(point: { x: number; y: number }, label: string): Promise<void>
+  moveAgentToRegion(regionId: string, label: string): Promise<void>
 }
 
 interface RegisterToolsOptions {
@@ -266,6 +269,7 @@ export function registerMythWeaverTools({
     execute: () => {
       const state = story.getState()
       const world = canvas.readWorld()
+      canvas.showAgentPresence('Reading the canvas')
       const filledRegions = world.regions?.filter((region) => object(region).fill).length ?? 0
       onAgentActivity?.(`ChatGPT read the canvas: ${filledRegions} filled regions and ${world.shapes.length} freeform shapes at revision ${state.revision}.`)
       return success(
@@ -296,11 +300,12 @@ export function registerMythWeaverTools({
       },
       required: ['regionId', 'color'],
     },
-    execute: (input) => {
+    execute: async (input) => {
       try {
         const root = object(input)
         const regionId = string(root.regionId, 'regionId', 48)
         const paintColor = color(root.color)
+        await canvas.moveAgentToRegion(regionId, `Painting ${regionId}`)
         canvas.paintRegion(regionId, paintColor, 'agent')
         onAgentActivity?.(`ChatGPT colored ${regionId} ${paintColor}. The move appeared on the shared canvas.`)
         return success(`Painted ${regionId} ${paintColor}. The person can see it now and the move can be undone.`, {
@@ -339,7 +344,7 @@ export function registerMythWeaverTools({
       },
       required: ['points', 'color'],
     },
-    execute: (input) => {
+    execute: async (input) => {
       try {
         const root = object(input)
         const rawPoints = Array.isArray(root.points) ? root.points : []
@@ -352,6 +357,7 @@ export function registerMythWeaverTools({
         })
         const paintColor = color(root.color)
         const width = number(root.width ?? 6, 'width', 2, 18)
+        if (points.length > 0) await canvas.moveAgentCursor(points[0], 'Drawing a brush stroke')
         const strokeId = canvas.addPaintStroke(points, paintColor, width, 'agent')
         onAgentActivity?.(`ChatGPT added a ${paintColor} brush stroke. It appeared on the shared canvas.`)
         return success(`Added brush stroke ${strokeId}. The person can see it now and the move can be undone.`, {

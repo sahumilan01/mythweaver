@@ -115,12 +115,16 @@ export function App() {
   const stageSample = () => {
     if (state.pending) return
     setGuideOpen(false)
-    canvas.paintRegion('fox-body', '#d9513f', 'agent')
-    setAgentActivity('ChatGPT colored the fox body coral. It is choosing a second region now.')
-    window.setTimeout(() => {
+    canvas.showAgentPresence('ChatGPT joined')
+    setAgentActivity('ChatGPT joined the canvas and is moving to the fox.')
+    void (async () => {
+      await canvas.moveAgentToRegion('fox-body', 'Painting Fox body')
+      canvas.paintRegion('fox-body', '#d9513f', 'agent')
+      setAgentActivity('ChatGPT colored the fox body coral. It is moving to the river.')
+      await canvas.moveAgentToRegion('river', 'Painting Winding river')
       canvas.paintRegion('river', '#263f98', 'agent')
       setAgentActivity('ChatGPT colored the river blue. You can keep painting at the same time.')
-    }, 650)
+    })()
   }
 
   const addStarter = () => {
@@ -157,7 +161,7 @@ export function App() {
   const hasPaint = Object.keys(canvasState.fills).length > 0 || canvasState.shapes.length > 0
   const phase = state.pending
     ? 'review'
-    : agentHasPaint || state.contributions.length > 0
+    : agentHasPaint || canvasState.agentPresence || state.contributions.length > 0
       ? 'build'
       : hasPaint || state.revision > 0
         ? 'ask'
@@ -177,6 +181,15 @@ export function App() {
         </div>
 
         <div className="header-actions">
+          <div className="collaborator-presence" aria-label={canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
+            <span className="collaborator-avatar human-avatar" title="You">You</span>
+            {canvasState.agentPresence && (
+              <span className="collaborator-avatar agent-avatar" title="ChatGPT is in the canvas">
+                <Robot weight="fill" aria-hidden="true" />
+                <i>ChatGPT joined</i>
+              </span>
+            )}
+          </div>
           <span className={`turn-status turn-${phase}`}>
             {phase === 'review' || phase === 'build' ? <Robot weight="bold" aria-hidden="true" /> : <PencilSimpleLine weight="bold" aria-hidden="true" />}
             {phase === 'review' ? 'Your decision' : phase === 'build' ? 'Painting together' : phase === 'ask' ? 'Invite ChatGPT' : 'Start painting'}

@@ -16,6 +16,7 @@ const VIEWBOX_HEIGHT = 700
 
 export type PaintOrigin = 'human' | 'agent'
 export type PaintPoint = { x: number; y: number }
+export type AgentPresence = { x: number; y: number; label: string }
 
 export const PAINT_REGIONS = [
   { id: 'hill', label: 'Moonlit hill', d: 'M0 515 C180 430 345 485 515 470 C720 450 890 390 1200 470 L1200 700 L0 700 Z' },
@@ -30,6 +31,17 @@ export const PAINT_REGIONS = [
 
 type RegionId = (typeof PAINT_REGIONS)[number]['id']
 type RegionFill = { color: string; origin: PaintOrigin }
+
+const REGION_CENTERS: Record<RegionId, PaintPoint> = {
+  hill: { x: 350, y: 520 },
+  river: { x: 830, y: 590 },
+  moon: { x: 260, y: 160 },
+  'star-one': { x: 104, y: 163 },
+  'star-two': { x: 438, y: 114 },
+  'fox-tail': { x: 820, y: 450 },
+  'fox-body': { x: 650, y: 440 },
+  'fox-head': { x: 648, y: 345 },
+}
 
 type CanvasShape =
   | { id: string; type: 'stroke'; origin: PaintOrigin; color: string; width: number; points: PaintPoint[] }
@@ -54,6 +66,7 @@ export interface CanvasSnapshot {
   fills: Partial<Record<RegionId, RegionFill>>
   focusedIds: string[]
   lastAction: { origin: PaintOrigin; label: string } | null
+  agentPresence: AgentPresence | null
 }
 
 export interface NativeCanvasPort extends CanvasPort {
@@ -68,9 +81,12 @@ export interface NativeCanvasPort extends CanvasPort {
   getSnapshot(): CanvasSnapshot
   getServerSnapshot(): CanvasSnapshot
   setPreviewHandler(handler: (beats: StoryBeat[]) => void): void
+  showAgentPresence(label: string): void
+  moveAgentCursor(point: PaintPoint, label: string): Promise<void>
+  moveAgentToRegion(regionId: string, label: string): Promise<void>
 }
 
-const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null }
+const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null, agentPresence: null }
 
 const loadSnapshot = (): CanvasSnapshot => {
   if (typeof window === 'undefined') return EMPTY_SNAPSHOT
@@ -83,6 +99,7 @@ const loadSnapshot = (): CanvasSnapshot => {
       lastAction: value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent'
         ? value.lastAction
         : null,
+      agentPresence: null,
     }
   } catch {
     return EMPTY_SNAPSHOT
@@ -129,6 +146,9 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       fills: { ...snapshot.fills, [region.id]: { color: safeColor(color), origin } },
       focusedIds: [region.id],
       lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} colored ${region.label}` },
+      agentPresence: origin === 'agent' && snapshot.agentPresence
+        ? { ...snapshot.agentPresence, label: `Painted ${region.label}` }
+        : snapshot.agentPresence,
     })
     if (origin === 'human') announceHumanChange()
     flash(region.id)
@@ -149,9 +169,38 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       ...snapshot,
       shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points }],
       lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} added a brush stroke` },
+      agentPresence: origin === 'agent' && snapshot.agentPresence
+        ? { ...snapshot.agentPresence, label: 'Finished brush stroke' }
+        : snapshot.agentPresence,
     })
     if (origin === 'human') announceHumanChange()
     return id
+  }
+
+  const showAgentPresence = (label: string) => {
+    publish({
+      ...snapshot,
+      agentPresence: snapshot.agentPresence
+        ? { ...snapshot.agentPresence, label }
+        : { x: 1080, y: 100, label },
+    })
+  }
+
+  const moveAgentCursor = async (point: PaintPoint, label: string) => {
+    if (!snapshot.agentPresence) {
+      showAgentPresence('ChatGPT joined')
+    }
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 90))
+    publish({
+      ...snapshot,
+      agentPresence: {
+        x: Math.min(VIEWBOX_WIDTH - 80, Math.max(20, point.x)),
+        y: Math.min(VIEWBOX_HEIGHT - 60, Math.max(20, point.y)),
+        label,
+      },
+    })
+    const reducedMotion = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    await new Promise((resolve) => globalThis.setTimeout(resolve, reducedMotion ? 80 : 620))
   }
 
   const renderElements = (proposal: ProposalDraft): StoryElement[] => {
@@ -247,6 +296,13 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     getServerSnapshot: () => EMPTY_SNAPSHOT,
     setPreviewHandler(handler) {
       previewHandler = handler
+    },
+    showAgentPresence,
+    moveAgentCursor,
+    moveAgentToRegion(regionId, label) {
+      const region = PAINT_REGIONS.find((item) => item.id === regionId)
+      if (!region) return Promise.reject(new Error(`Unknown paint region: ${regionId}.`))
+      return moveAgentCursor(REGION_CENTERS[region.id], label)
     },
   }
 }
@@ -346,6 +402,21 @@ export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
           ? <polyline key={shape.id} className={shape.origin === 'agent' ? 'agent-stroke' : 'human-stroke'} points={pointsString(shape.points)} fill="none" stroke={shape.color} strokeWidth={shape.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
           : <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
         {draft.length > 1 && <polyline points={pointsString(draft)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+        {snapshot.agentPresence && (
+          <g
+            className="agent-live-cursor"
+            style={{ transform: `translate(${snapshot.agentPresence.x}px, ${snapshot.agentPresence.y}px)` }}
+            aria-label={`ChatGPT cursor: ${snapshot.agentPresence.label}`}
+          >
+            <g className="agent-cursor-visual">
+              <path className="agent-cursor-arrow" d="M0 0 L5 31 L13 21 L22 34 L29 29 L19 17 L31 14 Z" />
+              <g className="agent-cursor-label" transform="translate(22 28)">
+                <rect x="0" y="0" width={Math.min(230, Math.max(108, snapshot.agentPresence.label.length * 7.1 + 26))} height="34" rx="9" />
+                <text x="13" y="22">{snapshot.agentPresence.label}</text>
+              </g>
+            </g>
+          </g>
+        )}
       </svg>
       <div className="native-toolbar" aria-label="Painting tools">
         <span><PencilSimple weight="bold" aria-hidden="true" /> Paint</span>
