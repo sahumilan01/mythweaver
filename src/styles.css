@@ -1045,6 +1045,49 @@ button:disabled {
   line-height: 1.45;
 }
 
+.mcp-readiness {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -3px 0 12px;
+  padding: 8px 10px;
+  color: var(--muted);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.mcp-readiness i {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #8d94a8;
+}
+
+.mcp-readiness.is-ready {
+  color: #1b684f;
+  background: rgba(81, 185, 150, 0.12);
+}
+
+.mcp-readiness.is-ready i {
+  background: #247c63;
+  box-shadow: 0 0 0 4px rgba(36, 124, 99, 0.12);
+}
+
+.mcp-readiness.is-error,
+.mcp-readiness.is-unavailable {
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.mcp-readiness.is-error i,
+.mcp-readiness.is-unavailable i {
+  background: var(--accent);
+}
+
 .turn-guide-actions {
   display: flex;
   align-items: center;

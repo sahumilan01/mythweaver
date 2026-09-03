@@ -77,26 +77,30 @@ export interface NativeCanvasPort extends CanvasPort {
 
 const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null, agentPresence: null, agentTwoPresence: null }
 
-const loadSnapshot = (): CanvasSnapshot => {
-  if (typeof window === 'undefined') return EMPTY_SNAPSHOT
+const parseStoredSnapshot = (raw: string | null, includeLivePresence = false): CanvasSnapshot => {
   try {
-    const value = JSON.parse(window.localStorage.getItem(CANVAS_STORAGE_KEY) ?? '{}')
+    const value = JSON.parse(raw ?? '{}')
     const rawShapes = Array.isArray(value.shapes) ? value.shapes : []
     const shapes = rawShapes.filter((shape: { type?: string }) => shape?.type !== 'stroke') as CanvasShape[]
     const removedFreehandMarks = shapes.length !== rawShapes.length
     return {
       shapes,
       fills: value.fills && typeof value.fills === 'object' ? value.fills : {},
-      focusedIds: [],
+      focusedIds: Array.isArray(value.focusedIds) ? value.focusedIds : [],
       lastAction: !removedFreehandMarks && (value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two')
         ? value.lastAction
         : null,
-      agentPresence: null,
-      agentTwoPresence: null,
+      agentPresence: includeLivePresence && value.agentPresence && typeof value.agentPresence === 'object' ? value.agentPresence : null,
+      agentTwoPresence: includeLivePresence && value.agentTwoPresence && typeof value.agentTwoPresence === 'object' ? value.agentTwoPresence : null,
     }
   } catch {
     return EMPTY_SNAPSHOT
   }
+}
+
+const loadSnapshot = (): CanvasSnapshot => {
+  if (typeof window === 'undefined') return EMPTY_SNAPSHOT
+  return parseStoredSnapshot(window.localStorage.getItem(CANVAS_STORAGE_KEY))
 }
 
 const safeColor = (color: string) => /^#[0-9a-f]{6}$/i.test(color) ? color : '#d9513f'
@@ -112,9 +116,24 @@ export function createNativeCanvasPort(): NativeCanvasPort {
   const publish = (next: CanvasSnapshot) => {
     snapshot = next
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem(CANVAS_STORAGE_KEY, JSON.stringify({ shapes: next.shapes, fills: next.fills, lastAction: next.lastAction }))
+      window.localStorage.setItem(CANVAS_STORAGE_KEY, JSON.stringify({
+        shapes: next.shapes,
+        fills: next.fills,
+        focusedIds: next.focusedIds,
+        lastAction: next.lastAction,
+        agentPresence: next.agentPresence,
+        agentTwoPresence: next.agentTwoPresence,
+      }))
     }
     listeners.forEach((listener) => listener())
+  }
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (event) => {
+      if (event.key !== CANVAS_STORAGE_KEY || !event.newValue) return
+      snapshot = parseStoredSnapshot(event.newValue, true)
+      listeners.forEach((listener) => listener())
+    })
   }
 
   const announceHumanChange = () => humanListeners.forEach((listener) => listener())

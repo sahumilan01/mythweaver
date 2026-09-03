@@ -36,4 +36,24 @@ describe('turn session', () => {
     session.noteMove('agent-two')
     expect(session.getState().active).toBe('agent')
   })
+
+  it('restores the live turn received from another canvas tab', () => {
+    const session = createTurnSessionStore('one-one')
+
+    session.restore({
+      mode: 'two-two',
+      active: 'agent',
+      movesRemaining: 2,
+      round: 4,
+      finished: false,
+    })
+
+    expect(session.getState()).toEqual({
+      mode: 'two-two',
+      active: 'agent',
+      movesRemaining: 2,
+      round: 4,
+      finished: false,
+    })
+  })
 })

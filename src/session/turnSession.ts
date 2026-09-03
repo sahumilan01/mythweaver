@@ -17,6 +17,7 @@ export interface TurnSessionStore {
   canMove(participant: SessionParticipant): boolean
   noteMove(participant: SessionParticipant): boolean
   finish(): void
+  restore(next: TurnSessionState): void
 }
 
 export const SESSION_MODES: Record<SessionMode, {
@@ -54,8 +55,8 @@ const initialFor = (mode: SessionMode): TurnSessionState => ({
   finished: false,
 })
 
-export function createTurnSessionStore(initialMode: SessionMode = 'one-one'): TurnSessionStore {
-  let state = initialFor(initialMode)
+export function createTurnSessionStore(initial: SessionMode | TurnSessionState = 'one-one'): TurnSessionStore {
+  let state = typeof initial === 'string' ? initialFor(initial) : { ...initial }
   const listeners = new Set<() => void>()
   const publish = (next: TurnSessionState) => {
     state = next
@@ -103,6 +104,12 @@ export function createTurnSessionStore(initialMode: SessionMode = 'one-one'): Tu
     },
     finish() {
       publish({ ...state, finished: true })
+    },
+    restore(next) {
+      if (!(next.mode in SESSION_MODES)) return
+      if (!['human', 'agent', 'agent-two'].includes(next.active)) return
+      if (!Number.isFinite(next.movesRemaining) || !Number.isFinite(next.round)) return
+      publish({ ...next })
     },
   }
 }

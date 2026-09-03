@@ -3,7 +3,10 @@ import { createNativeCanvasPort } from './nativeCanvas'
 
 describe('native pair-paint canvas', () => {
   beforeEach(() => vi.useFakeTimers())
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
 
   it('keeps human and agent paint in the same reactive world', () => {
     const canvas = createNativeCanvasPort()
@@ -94,5 +97,30 @@ describe('native pair-paint canvas', () => {
     expect(canvas.getSnapshot().agentTwoPresence?.label).toBe('Painted Winding river')
     const regions = canvas.readWorld().regions as Array<{ id: string; fill: { origin: string } | null }>
     expect(regions.find((region) => region.id === 'river')?.fill?.origin).toBe('agent-two')
+  })
+
+  it('mirrors agent paint and presence into another tab', () => {
+    const values = new Map<string, string>()
+    const storageListeners: Array<(event: { key: string; newValue: string }) => void> = []
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+      },
+      addEventListener: (type: string, listener: (event: { key: string; newValue: string }) => void) => {
+        if (type === 'storage') storageListeners.push(listener)
+      },
+    })
+
+    const watchingTab = createNativeCanvasPort()
+    const agentTab = createNativeCanvasPort()
+    agentTab.paintRegion('moon', '#f0b343', 'agent')
+    agentTab.showAgentPresence('WebMCP • Balances the cool river', 'agent')
+
+    const raw = values.get('mythweaver-pair-painting-v1') ?? ''
+    storageListeners.forEach((listener) => listener({ key: 'mythweaver-pair-painting-v1', newValue: raw }))
+
+    expect(watchingTab.getSnapshot().fills.moon).toEqual({ color: '#f0b343', origin: 'agent' })
+    expect(watchingTab.getSnapshot().agentPresence?.label).toBe('WebMCP • Balances the cool river')
   })
 })

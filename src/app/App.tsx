@@ -17,10 +17,10 @@ import {
   UserPlus,
   X,
 } from '@phosphor-icons/react'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
 import { chooseNextSectionFill } from '../canvas/paintingModel'
-import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
+import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant, type TurnSessionState } from '../session/turnSession'
 import {
   createStoryStore,
   type StoryBeat,
@@ -33,11 +33,25 @@ import { registerMythWeaverTools } from '../webmcp/registerTools'
 const STORY_STORAGE_KEY = 'mythweaver-story-state-v1'
 const SESSION_STORAGE_KEY = 'mythweaver-session-mode-v1'
 const ONBOARDING_STORAGE_KEY = 'mythweaver-onboarding-seen-v1'
+type WebMcpStatus = 'checking' | 'ready' | 'unavailable' | 'error'
 
-function loadSessionMode(): SessionMode {
+function loadSessionState(): SessionMode | TurnSessionState {
   if (typeof window === 'undefined') return 'one-one'
   const saved = window.localStorage.getItem(SESSION_STORAGE_KEY)
-  return saved && saved in SESSION_MODES ? saved as SessionMode : 'one-one'
+  if (!saved) return 'one-one'
+  if (saved in SESSION_MODES) return saved as SessionMode
+  try {
+    const state = JSON.parse(saved) as Partial<TurnSessionState>
+    if (
+      state.mode && state.mode in SESSION_MODES &&
+      (state.active === 'human' || state.active === 'agent' || state.active === 'agent-two') &&
+      typeof state.movesRemaining === 'number' && typeof state.round === 'number' &&
+      typeof state.finished === 'boolean'
+    ) return state as TurnSessionState
+  } catch {
+    // Fall through to the default session.
+  }
+  return 'one-one'
 }
 
 function loadStoryState(): StoryState | undefined {
@@ -59,8 +73,8 @@ function loadStoryState(): StoryState | undefined {
   }
 }
 
-const SAMPLE_PROMPT =
-  'Join my MythWeaver painting session through WebMCP and take the first turn. Read the live canvas, follow my turn rule, and choose each predefined section and color with visual judgment. Explain each choice briefly, paint only when it is an agent turn, and stop when the brush passes back to me.'
+const agentInviteFor = (pageUrl: string) =>
+  `Open my MythWeaver canvas: ${pageUrl}\n\nJoin this painting through WebMCP and take the first turn. Call join_painting_session, read the live canvas, follow my turn rule, and choose each predefined section and color with visual judgment. Explain each choice briefly, paint only when it is an agent turn, and stop when the brush passes back to me.`
 
 function useStoryState(story: StoryStore) {
   return useSyncExternalStore(story.subscribe, story.getState, story.getState)
@@ -69,7 +83,7 @@ function useStoryState(story: StoryStore) {
 export function App() {
   const [story] = useState(() => createStoryStore(loadStoryState()))
   const [canvas] = useState(() => createNativeCanvasPort())
-  const [turnSession] = useState(() => createTurnSessionStore())
+  const [turnSession] = useState(() => createTurnSessionStore(loadSessionState()))
   const [guideOpen, setGuideOpen] = useState(() => {
     const saved = canvas.getSnapshot()
     return Object.keys(saved.fills).length === 0 && saved.shapes.length === 0
@@ -78,7 +92,8 @@ export function App() {
   const [rulesOpen, setRulesOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => typeof window === 'undefined' || window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'true')
   const [agentRequested, setAgentRequested] = useState(false)
-  const [agentConnected, setAgentConnected] = useState(false)
+  const [webMcpStatus, setWebMcpStatus] = useState<WebMcpStatus>('checking')
+  const [shareUrl, setShareUrl] = useState('this MythWeaver page')
   const [copied, setCopied] = useState(false)
   const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
@@ -87,7 +102,14 @@ export function App() {
   const state = useStoryState(story)
   const canvasState = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
   const turnState = useSyncExternalStore(turnSession.subscribe, turnSession.getState, turnSession.getState)
-  const webMcpReady = typeof document !== 'undefined' && Boolean(document.modelContext)
+  const agentConnected = Boolean(canvasState.agentPresence || canvasState.agentTwoPresence)
+  const visibleAgentActivity = canvasState.agentPresence?.label ?? canvasState.agentTwoPresence?.label ?? agentActivity
+  const webMcpReady = webMcpStatus === 'ready'
+  const applyingRemoteSession = useRef(false)
+
+  useEffect(() => {
+    setShareUrl(`${window.location.origin}${window.location.pathname}`)
+  }, [])
 
   useEffect(
     () => story.subscribe(() => {
@@ -96,20 +118,29 @@ export function App() {
     [story],
   )
 
-  useEffect(
-    () => {
-      const savedMode = loadSessionMode()
-      if (savedMode !== turnSession.getState().mode) turnSession.setMode(savedMode)
-    },
-    [turnSession],
-  )
-
-  useEffect(
-    () => turnSession.subscribe(() => {
-      window.localStorage.setItem(SESSION_STORAGE_KEY, turnSession.getState().mode)
-    }),
-    [turnSession],
-  )
+  useEffect(() => {
+    const unsubscribe = turnSession.subscribe(() => {
+      if (applyingRemoteSession.current) {
+        applyingRemoteSession.current = false
+        return
+      }
+      window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(turnSession.getState()))
+    })
+    const syncSession = (event: StorageEvent) => {
+      if (event.key !== SESSION_STORAGE_KEY || !event.newValue) return
+      try {
+        applyingRemoteSession.current = true
+        turnSession.restore(JSON.parse(event.newValue) as TurnSessionState)
+      } catch {
+        applyingRemoteSession.current = false
+      }
+    }
+    window.addEventListener('storage', syncSession)
+    return () => {
+      unsubscribe()
+      window.removeEventListener('storage', syncSession)
+    }
+  }, [turnSession])
 
   const startPerformance = useCallback((beats: StoryBeat[]) => {
     if (beats.length > 0) setPlayback({ beats, index: 0 })
@@ -125,19 +156,45 @@ export function App() {
   }, [canvas, story, turnSession])
 
   useEffect(() => {
-    if (!document.modelContext) return
-    return registerMythWeaverTools({
-      modelContext: document.modelContext,
-      story,
-      canvas,
-      turnSession,
-      onAgentActivity: setAgentActivity,
-      onAgentJoined: () => {
-        setAgentConnected(true)
-        setAgentRequested(false)
-        setGuideOpen(false)
-      },
-    })
+    let disposeTools: (() => void) | undefined
+    let retryTimer: number | undefined
+    let attempts = 0
+    let cancelled = false
+
+    const connectTools = () => {
+      if (cancelled) return
+      if (!document.modelContext) {
+        attempts += 1
+        if (attempts >= 12) setWebMcpStatus('unavailable')
+        retryTimer = window.setTimeout(connectTools, 500)
+        return
+      }
+
+      setWebMcpStatus('ready')
+      setAgentActivity('WebMCP is ready. This browser’s ChatGPT agent can discover 9 live canvas tools.')
+      disposeTools = registerMythWeaverTools({
+        modelContext: document.modelContext,
+        story,
+        canvas,
+        turnSession,
+        onAgentActivity: setAgentActivity,
+        onAgentJoined: () => {
+          setAgentRequested(false)
+          setGuideOpen(false)
+        },
+        onRegistrationError: (toolName) => {
+          setWebMcpStatus('error')
+          setAgentActivity(`WebMCP could not register ${toolName}. Reload this page inside ChatGPT and try again.`)
+        },
+      })
+    }
+
+    connectTools()
+    return () => {
+      cancelled = true
+      if (retryTimer) window.clearTimeout(retryTimer)
+      disposeTools?.()
+    }
   }, [canvas, story, turnSession])
 
   useEffect(() => {
@@ -163,11 +220,13 @@ export function App() {
     setGuideOpen(true)
     setAgentActivity('Invitation ready. Send it in ChatGPT; the real agent appears only after its first WebMCP call.')
     try {
-      await navigator.clipboard.writeText(SAMPLE_PROMPT)
+      await navigator.clipboard.writeText(agentInviteFor(shareUrl))
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1600)
     } catch {
+      setAgentRequested(false)
       setCopied(false)
+      setAgentActivity('Clipboard access was blocked. Copy the visible page address and instruction from the connection card.')
     }
   }
 
@@ -217,9 +276,16 @@ export function App() {
   const perform = () => startPerformance(committedBeats)
 
   const copyPrompt = async () => {
-    await navigator.clipboard.writeText(SAMPLE_PROMPT)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1600)
+    try {
+      await navigator.clipboard.writeText(agentInviteFor(shareUrl))
+      setAgentRequested(true)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setAgentRequested(false)
+      setCopied(false)
+      setAgentActivity('Clipboard access was blocked. Copy the visible page address and instruction from this card.')
+    }
   }
 
   const agentHasPaint = Object.values(canvasState.fills).some((fill) => fill?.origin === 'agent')
@@ -251,7 +317,7 @@ export function App() {
           {!canvasState.agentPresence && (
             <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()}>
               <UserPlus weight="bold" aria-hidden="true" />
-              <span>{agentRequested ? 'Waiting for ChatGPT…' : 'Invite ChatGPT'}</span>
+              <span>{agentRequested ? 'Agent link copied' : 'Connect your agent'}</span>
             </button>
           )}
           <div className="collaborator-presence" aria-label={canvasState.agentTwoPresence ? 'You, ChatGPT, and Mica are in the canvas' : canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
@@ -314,15 +380,15 @@ export function App() {
         {agentConnected && (
           <aside className="mcp-live-receipt" aria-live="polite" aria-label="Live WebMCP activity">
             <span><i /> WebMCP live</span>
-            <p>{agentActivity}</p>
+            <p>{visibleAgentActivity}</p>
           </aside>
         )}
 
         {!guideOpen && phase === 'ask' && !canvasState.agentPresence && (
           <aside className="pair-hint" aria-live="polite">
             <Robot weight="fill" aria-hidden="true" />
-            <span><b>Your section is filled.</b> Invite ChatGPT to take the next turn.</span>
-            <button type="button" onClick={() => void inviteAgent()}>{agentRequested ? 'Send in ChatGPT' : 'Invite ChatGPT'}</button>
+            <span><b>Your section is filled.</b> Copy this live canvas for your agent.</span>
+            <button type="button" onClick={() => void inviteAgent()}>{agentRequested ? 'Paste in ChatGPT' : 'Copy for agent'}</button>
           </aside>
         )}
 
@@ -334,6 +400,8 @@ export function App() {
           <TurnGuide
             phase={phase}
             webMcpReady={webMcpReady}
+            webMcpStatus={webMcpStatus}
+            shareUrl={shareUrl}
             copied={copied}
             agentRequested={agentRequested}
             onCopy={copyPrompt}
@@ -393,20 +461,20 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
       <section className="welcome-panel">
         <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
         <p className="welcome-kicker">Your first painting</p>
-        <h1 id="welcome-title">Color this page with ChatGPT</h1>
-        <p className="welcome-copy">Invite the real ChatGPT agent through WebMCP. It reads this exact page, chooses one outlined section and color, explains why, then passes the brush to you.</p>
+        <h1 id="welcome-title">Bring your agent into the canvas</h1>
+        <p className="welcome-copy">Copy this live page for your ChatGPT agent. It opens the same canvas, reads every paintable section through WebMCP, then works beside you.</p>
         <div className="consent-flow" aria-label="How pair painting works">
-          <span><UserPlus weight="bold" aria-hidden="true" /> Invite ChatGPT</span>
-          <span><Robot weight="fill" aria-hidden="true" /> Send invite in chat</span>
-          <span><PaintBucket weight="fill" aria-hidden="true" /> Take your turn</span>
+          <span><UserPlus weight="bold" aria-hidden="true" /> Copy live canvas</span>
+          <span><Robot weight="fill" aria-hidden="true" /> Paste to your agent</span>
+          <span><PaintBucket weight="fill" aria-hidden="true" /> Paint together</span>
         </div>
         <div className="welcome-paths">
           <button className="prompt-button" type="button" onClick={onInvite}>
-            <UserPlus weight="bold" aria-hidden="true" /> Copy invite for ChatGPT
+            <UserPlus weight="bold" aria-hidden="true" /> Copy for your agent
           </button>
           <button className="sample-button" type="button" onClick={onDismiss}>I’ll look around first</button>
         </div>
-        <p className="support-note">Made for shared learning: every AI choice is named, visible, and reversible. ChatGPT’s avatar appears only after a real WebMCP call.</p>
+        <p className="support-note">Fast, free, and no login required. Each visitor connects their own agent; its avatar appears only after a real WebMCP call.</p>
       </section>
     </div>
   )
@@ -500,6 +568,8 @@ type GuidePhase = 'start' | 'ask' | 'build' | 'review'
 function TurnGuide({
   phase,
   webMcpReady,
+  webMcpStatus,
+  shareUrl,
   copied,
   agentRequested,
   onClose,
@@ -510,6 +580,8 @@ function TurnGuide({
 }: {
   phase: GuidePhase
   webMcpReady: boolean
+  webMcpStatus: WebMcpStatus
+  shareUrl: string
   copied: boolean
   agentRequested: boolean
   onClose: () => void
@@ -531,19 +603,31 @@ function TurnGuide({
         <span>{isAsk ? 'Invite your partner' : isBuild ? 'Pair painting live' : 'Your turn'}</span>
         <i>{isStart ? '1' : isAsk ? '2' : '3'}</i>
       </div>
-      <h1>{isStart ? 'Tap a shape to color it' : isAsk ? 'Invite ChatGPT to paint with you' : 'You’re painting together'}</h1>
+      <h1>{isStart ? 'Tap a shape to color it' : isAsk ? 'Bring your agent into this canvas' : 'You’re painting together'}</h1>
       <p>
         {isStart
           ? 'Choose a color below, then tap one outlined section to fill it.'
           : isAsk
             ? webMcpReady
               ? agentRequested
-                ? 'Invitation copied. Paste it into ChatGPT. The avatar appears when ChatGPT reaches this canvas through WebMCP.'
-                : 'Send the line below in ChatGPT. WebMCP lets it read and color this same picture with you.'
+                ? 'The live page and instructions are copied. Paste them into ChatGPT; its avatar appears after the first WebMCP call.'
+                : 'Copy this live page into ChatGPT. WebMCP lets your agent read and color the same picture with you.'
               : 'Open this site inside ChatGPT to pair paint live. You can preview the rhythm here first.'
             : 'Your fills and ChatGPT’s fills appear on the same page as they happen. You both play by the same rule: one color, one section.'}
       </p>
-      {isAsk && <blockquote>“{SAMPLE_PROMPT}”</blockquote>}
+      {isAsk && (
+        <div className={`mcp-readiness is-${webMcpStatus}`}>
+          <i />
+          <span>{webMcpStatus === 'ready'
+            ? '9 WebMCP tools ready for your agent'
+            : webMcpStatus === 'checking'
+              ? 'Checking this browser for WebMCP…'
+              : webMcpStatus === 'error'
+                ? 'Tool registration failed — reload inside ChatGPT'
+                : 'WebMCP is not available here — open this page inside ChatGPT'}</span>
+        </div>
+      )}
+      {isAsk && <blockquote><strong>{shareUrl}</strong><br />Open this canvas, join through WebMCP, follow my turn rule, and explain each color choice.</blockquote>}
       <div className="turn-guide-actions">
         {isStart && (
           <button className="prompt-button" type="button" onClick={onStarter} disabled={!ready}>
@@ -554,7 +638,7 @@ function TurnGuide({
         {isAsk && (
           <button className="prompt-button" type="button" onClick={onCopy}>
             <Copy weight="bold" aria-hidden="true" />
-            {copied ? 'Invitation copied — paste in chat' : 'Copy invitation'}
+            {copied ? 'Copied — paste to your agent' : 'Copy page + instructions'}
           </button>
         )}
         {isAsk && (

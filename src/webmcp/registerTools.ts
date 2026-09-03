@@ -88,6 +88,7 @@ interface RegisterToolsOptions {
   }
   onAgentActivity?: (message: string) => void
   onAgentJoined?: (participant: 'agent' | 'agent-two') => void
+  onRegistrationError?: (toolName: string, error: unknown) => void
 }
 
 const roles = new Set<StoryRole>(['character', 'place', 'object', 'event'])
@@ -259,10 +260,12 @@ export function registerMythWeaverTools({
   turnSession,
   onAgentActivity,
   onAgentJoined,
+  onRegistrationError,
 }: RegisterToolsOptions): () => void {
   const controller = new AbortController()
   const register = (tool: RegisteredTool) => {
-    void modelContext.registerTool(tool, { signal: controller.signal })
+    void Promise.resolve(modelContext.registerTool(tool, { signal: controller.signal }))
+      .catch((error) => onRegistrationError?.(tool.name, error))
   }
 
   const participantName = (participant: SessionParticipant) => participant === 'agent-two' ? 'Mica' : participant === 'agent' ? 'ChatGPT' : 'the person'
@@ -415,6 +418,7 @@ export function registerMythWeaverTools({
         onAgentActivity?.(`${participantName(participant)} chose ${regionId}: ${reason}`)
         await canvas.moveAgentToRegion(regionId, reason, participant)
         canvas.paintRegion(regionId, paintColor, participant)
+        canvas.showAgentPresence(`WebMCP • ${reason}`, participant)
         turnSession?.noteMove(participant)
         const remainingArtifacts = canvas.readWorld().artifacts
         const hasOpenRegion = Array.isArray(remainingArtifacts) && remainingArtifacts.some((artifact) => !object(artifact).fill)
