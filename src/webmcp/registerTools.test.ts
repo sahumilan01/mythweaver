@@ -23,6 +23,7 @@ function createHarness(turnSession?: TurnSessionStore) {
   const showAgentPresence = vi.fn()
   const moveAgentCursor = vi.fn(async () => undefined)
   const moveAgentToRegion = vi.fn(async () => undefined)
+  const onAgentJoined = vi.fn()
   const modelContext: ModelContextPort = {
     registerTool(tool) {
       tools.set(tool.name, tool)
@@ -57,9 +58,10 @@ function createHarness(turnSession?: TurnSessionStore) {
     story: createStoryStore(),
     canvas,
     turnSession,
+    onAgentJoined,
   })
 
-  return { tools, renderProposal, paintRegion, undoLast, clearPaint, moveAgentToRegion }
+  return { tools, renderProposal, paintRegion, undoLast, clearPaint, moveAgentToRegion, showAgentPresence, onAgentJoined }
 }
 
 describe('MythWeaver WebMCP tools', () => {
@@ -67,6 +69,7 @@ describe('MythWeaver WebMCP tools', () => {
     const { tools } = createHarness()
 
     expect([...tools.keys()]).toEqual([
+      'join_painting_session',
       'get_story_world',
       'paint_canvas_region',
       'undo_agent_paint',
@@ -80,13 +83,38 @@ describe('MythWeaver WebMCP tools', () => {
     expect([...tools.keys()]).not.toContain('discard_proposal')
   })
 
+  it('uses an explicit WebMCP handshake before claiming ChatGPT joined', async () => {
+    const session = createTurnSessionStore('one-one')
+    const { tools, showAgentPresence, onAgentJoined } = createHarness(session)
+
+    const result = await tools.get('join_painting_session')!.execute({ takeFirstTurn: true })
+
+    expect(result.isError).not.toBe(true)
+    expect(showAgentPresence).toHaveBeenCalledWith('ChatGPT joined through WebMCP', 'agent')
+    expect(onAgentJoined).toHaveBeenCalledWith('agent')
+    expect(session.getState().active).toBe('agent')
+    expect(result.structuredContent).toEqual(expect.objectContaining({
+      agentMayPaint: true,
+      openRegions: expect.any(Array),
+      collaborationProtocol: expect.any(Array),
+    }))
+  })
+
   it('returns the current revision and canvas state to the agent', async () => {
     const { tools } = createHarness()
 
     const result = await tools.get('get_story_world')!.execute({})
 
     expect(result.structuredContent).toEqual(
-      expect.objectContaining({ revision: 0, shapes: [], selection: [], artifacts: expect.any(Array), palette: expect.any(Array) }),
+      expect.objectContaining({
+        revision: 0,
+        shapes: [],
+        selection: [],
+        artifacts: expect.any(Array),
+        palette: expect.any(Array),
+        openRegions: expect.any(Array),
+        recommendedNextAction: expect.any(String),
+      }),
     )
     expect(result.content[0]?.text).toMatch(/revision 0/i)
   })
@@ -94,24 +122,25 @@ describe('MythWeaver WebMCP tools', () => {
   it('lets the agent paint one named region immediately', async () => {
     const { tools, paintRegion, moveAgentToRegion } = createHarness()
 
-    const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
+    const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343', reason: 'The warm moon balances the cool river.' })
 
     expect(result.isError).not.toBe(true)
-    expect(moveAgentToRegion).toHaveBeenCalledWith('moon', 'Painting moon')
+    expect(moveAgentToRegion).toHaveBeenCalledWith('moon', 'The warm moon balances the cool river.', 'agent')
     expect(paintRegion).toHaveBeenCalledWith('moon', '#f0b343', 'agent')
     expect(moveAgentToRegion.mock.invocationCallOrder[0]).toBeLessThan(paintRegion.mock.invocationCallOrder[0])
+    expect(result.structuredContent).toEqual(expect.objectContaining({ reason: 'The warm moon balances the cool river.', paintedBy: 'agent' }))
   })
 
   it('obeys the human-selected turn rule', async () => {
     const session = createTurnSessionStore('one-one')
     const { tools, paintRegion } = createHarness(session)
 
-    const early = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
+    const early = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343', reason: 'Start with a warm focal point.' })
     expect(early.isError).toBe(true)
     expect(paintRegion).not.toHaveBeenCalled()
 
     session.noteMove('human')
-    const turn = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
+    const turn = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343', reason: 'Echo the person’s warm palette.' })
     expect(turn.isError).not.toBe(true)
     expect(session.getState().active).toBe('human')
   })
@@ -119,10 +148,22 @@ describe('MythWeaver WebMCP tools', () => {
   it('rejects malformed paint colors before touching the canvas', async () => {
     const { tools, paintRegion } = createHarness()
 
-    const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: 'yellow' })
+    const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: 'yellow', reason: 'A warm focal point.' })
 
     expect(result.isError).toBe(true)
     expect(paintRegion).not.toHaveBeenCalled()
+  })
+
+  it('lets the real MCP caller paint for the second-agent turn', async () => {
+    const session = createTurnSessionStore('agent-duo')
+    const { tools, paintRegion } = createHarness(session)
+    await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343', reason: 'ChatGPT starts with the focal point.' })
+
+    const second = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#263f98', reason: 'Mica adds a cool counterpoint.' })
+
+    expect(second.isError).not.toBe(true)
+    expect(paintRegion).toHaveBeenLastCalledWith('moon', '#263f98', 'agent-two')
+    expect(second.structuredContent).toEqual(expect.objectContaining({ paintedBy: 'agent-two' }))
   })
 
   it('keeps the agent tool surface section-fill only', () => {

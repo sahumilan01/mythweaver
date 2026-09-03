@@ -81,10 +81,13 @@ interface RegisterToolsOptions {
   canvas: CanvasPort
   turnSession?: {
     getState(): TurnSessionState
+    startWith(participant: SessionParticipant): void
     canMove(participant: SessionParticipant): boolean
     noteMove(participant: SessionParticipant): boolean
+    finish(): void
   }
   onAgentActivity?: (message: string) => void
+  onAgentJoined?: (participant: 'agent' | 'agent-two') => void
 }
 
 const roles = new Set<StoryRole>(['character', 'place', 'object', 'event'])
@@ -255,11 +258,94 @@ export function registerMythWeaverTools({
   canvas,
   turnSession,
   onAgentActivity,
+  onAgentJoined,
 }: RegisterToolsOptions): () => void {
   const controller = new AbortController()
   const register = (tool: RegisteredTool) => {
     void modelContext.registerTool(tool, { signal: controller.signal })
   }
+
+  const participantName = (participant: SessionParticipant) => participant === 'agent-two' ? 'Mica' : participant === 'agent' ? 'ChatGPT' : 'the person'
+
+  const sessionBriefing = () => {
+    const state = story.getState()
+    const world = canvas.readWorld()
+    const sessionState = turnSession?.getState() ?? null
+    const artifacts = Array.isArray(world.artifacts) ? world.artifacts.map(object) : []
+    const openRegions = artifacts.filter((artifact) => !artifact.fill).map((artifact) => ({
+      id: artifact.id,
+      label: artifact.label,
+      kind: artifact.kind,
+      description: artifact.description,
+      center: artifact.center,
+      suggestedColors: artifact.suggestedColors,
+    }))
+    const humanPaint = artifacts.filter((artifact) => object(artifact.fill ?? {}).origin === 'human').map((artifact) => ({
+      id: artifact.id,
+      color: object(artifact.fill ?? {}).color,
+    }))
+    const active = sessionState?.active ?? 'agent'
+    const agentMayPaint = openRegions.length > 0 && (active === 'agent' || active === 'agent-two')
+    const recommendedNextAction = sessionState?.finished || openRegions.length === 0
+      ? 'The page is complete. Stop and tell the person what the session created.'
+      : agentMayPaint
+        ? `It is ${participantName(active)}'s turn. Choose one open region and a harmonious color, then call paint_canvas_region with a concise visual reason.`
+        : `It is the person's turn. Do not paint. Invite them to choose a color and fill ${sessionState?.movesRemaining ?? 1} section${sessionState?.movesRemaining === 1 ? '' : 's'}.`
+
+    return {
+      revision: state.revision,
+      ...world,
+      pending: state.pending,
+      contributions: state.contributions,
+      turnSession: sessionState,
+      openRegions,
+      humanPaint,
+      agentMayPaint,
+      recommendedNextAction,
+      collaborationProtocol: [
+        'Use the live artifact IDs and fills returned here; never guess screen coordinates or draw freehand lines.',
+        'Treat the person’s existing colors as creative intent. You may echo one for unity or choose a suggested contrasting color for balance.',
+        'Choose with visual judgment: connect related artifacts, distribute warm and cool colors, and avoid repainting unless the person asks.',
+        'Make one atomic fill per paint_canvas_region call. Include a short reason the person can see while your cursor moves.',
+        'After every fill, inspect the returned turnSession. Continue only while the active participant is an agent; otherwise stop and hand the brush back.',
+        'Only the person may accept or discard a proposed story contribution.',
+      ],
+      consentRule: 'You may propose or revise. Only the person can accept or discard in the canvas UI.',
+    }
+  }
+
+  register({
+    name: 'join_painting_session',
+    title: 'Join the painting session',
+    description:
+      'Call this first when the person asks ChatGPT to join, start, or paint together. It makes the real WebMCP agent visibly present and returns the live scene, turn rule, open sections, prior human choices, and exact next-action guidance.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        takeFirstTurn: {
+          type: 'boolean',
+          description: 'Set true only when the person explicitly asks ChatGPT to make the first move.',
+        },
+      },
+    },
+    execute: (input) => {
+      try {
+        const root = object(input)
+        if (root.takeFirstTurn === true) turnSession?.startWith('agent')
+        canvas.showAgentPresence('ChatGPT joined through WebMCP', 'agent')
+        onAgentJoined?.('agent')
+        onAgentActivity?.('ChatGPT joined through WebMCP and is reading the live canvas before choosing.')
+        const briefing = sessionBriefing()
+        return success(
+          `Joined the shared canvas through WebMCP. ${briefing.recommendedNextAction}`,
+          briefing,
+        )
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  })
 
   register({
     name: 'get_story_world',
@@ -269,23 +355,15 @@ export function registerMythWeaverTools({
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: () => {
-      const state = story.getState()
-      const world = canvas.readWorld()
-      const sessionState = turnSession?.getState()
-      canvas.showAgentPresence('Reading the canvas')
-      const filledRegions = world.regions?.filter((region) => object(region).fill).length ?? 0
-      onAgentActivity?.(`ChatGPT read the canvas: ${filledRegions} of ${world.regions?.length ?? 0} predefined sections are filled at revision ${state.revision}.`)
+      const briefing = sessionBriefing()
+      canvas.showAgentPresence('Reading the live canvas through WebMCP')
+      onAgentJoined?.('agent')
+      const regionCount = Array.isArray(briefing.regions) ? briefing.regions.length : 0
+      const filledRegions = regionCount - briefing.openRegions.length
+      onAgentActivity?.(`ChatGPT read the live canvas through WebMCP: ${filledRegions} of ${regionCount} sections are filled.`)
       return success(
-        `Story world revision ${state.revision}. ${filledRegions} of ${world.regions?.length ?? 0} predefined sections are filled, and there is ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.${sessionState ? ` Session rule: ${sessionState.mode}; active participant: ${sessionState.active}; ${sessionState.movesRemaining} moves remaining.` : ''}`,
-        {
-          revision: state.revision,
-          ...world,
-          pending: state.pending,
-          contributions: state.contributions,
-          consentRule:
-            'You may propose or revise. Only the person can accept or discard in the canvas UI.',
-          turnSession: sessionState ?? null,
-        },
+        `Read live canvas revision ${briefing.revision}. ${filledRegions} of ${regionCount} sections are filled. ${briefing.recommendedNextAction}`,
+        briefing,
       )
     },
   })
@@ -301,25 +379,38 @@ export function registerMythWeaverTools({
       properties: {
         regionId: { type: 'string', enum: PAINT_ARTIFACTS.map((artifact) => artifact.id), description: 'One predefined section ID returned by get_story_world.' },
         color: { type: 'string', description: 'Six-digit hex color such as #d9513f.' },
+        reason: { type: 'string', description: 'A short, user-facing visual reason for choosing this section and color.' },
       },
-      required: ['regionId', 'color'],
+      required: ['regionId', 'color', 'reason'],
     },
     execute: async (input) => {
       try {
         const root = object(input)
         const regionId = string(root.regionId, 'regionId', 48)
         const paintColor = color(root.color)
-        if (turnSession && !turnSession.canMove('agent')) {
-          throw new Error(`Wait for ChatGPT's turn. The active participant is ${turnSession.getState().active}.`)
+        const reason = string(root.reason, 'reason', 180)
+        const active = turnSession?.getState().active ?? 'agent'
+        const participant = active === 'agent-two' ? 'agent-two' : 'agent'
+        if (turnSession && !turnSession.canMove(participant)) {
+          throw new Error(`It is ${participantName(active)}'s turn. Read get_story_world and wait rather than painting.`)
         }
-        await canvas.moveAgentToRegion(regionId, `Painting ${regionId}`)
-        canvas.paintRegion(regionId, paintColor, 'agent')
-        turnSession?.noteMove('agent')
-        onAgentActivity?.(`ChatGPT colored ${regionId} ${paintColor}. The move appeared on the shared canvas.`)
-        return success(`Painted ${regionId} ${paintColor}. The person can see it now and the move can be undone.`, {
+        canvas.showAgentPresence(`${participantName(participant)} is deciding`, participant)
+        onAgentJoined?.(participant)
+        onAgentActivity?.(`${participantName(participant)} chose ${regionId}: ${reason}`)
+        await canvas.moveAgentToRegion(regionId, reason, participant)
+        canvas.paintRegion(regionId, paintColor, participant)
+        turnSession?.noteMove(participant)
+        const remainingArtifacts = canvas.readWorld().artifacts
+        const hasOpenRegion = Array.isArray(remainingArtifacts) && remainingArtifacts.some((artifact) => !object(artifact).fill)
+        if (!hasOpenRegion) turnSession?.finish()
+        const briefing = sessionBriefing()
+        onAgentActivity?.(`${participantName(participant)} colored ${regionId} ${paintColor} through WebMCP — ${reason}`)
+        return success(`Painted ${regionId} ${paintColor} through WebMCP because ${reason} ${briefing.recommendedNextAction}`, {
           regionId,
           color: paintColor,
-          world: canvas.readWorld(),
+          reason,
+          paintedBy: participant,
+          ...briefing,
         })
       } catch (error) {
         return failure(error)

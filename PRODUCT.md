@@ -8,15 +8,16 @@ Children, families, educators, creative teams, and hackathon judges who open Myt
 
 MythWeaver makes human-agent collaboration feel like pair programming, but on a coloring page. The person and ChatGPT share one live artifact. Either can make the next small move; the other can see it as it happens and build on it.
 
-Success means a new user paints within seconds, always knows who made the latest change, and can invite the agent without leaving a blank or blocked canvas.
+Success means a new user paints within seconds, always knows who made the latest change, and can invite the real host agent without mistaking a local animation for ChatGPT.
 
 ## Interaction ladder
 
 1. Start: the page offers one obvious action, **Color the moon**.
-2. Pair: the canvas opens up and tells the person what to ask ChatGPT.
-3. Collaborate: both sides fill named regions or add strokes in real time.
-4. Direct: the person asks for moods, palettes, or specific regions.
-5. Compose: the agent may stage larger story elements, which require human approval.
+2. Pair: the canvas copies a precise invitation for the person to send in ChatGPT.
+3. Join: the ChatGPT avatar appears only when a real WebMCP call reaches the page.
+4. Collaborate: both sides fill named regions in real time. The agent explains each visual choice.
+5. Direct: the person asks for moods, palettes, or specific regions.
+6. Compose: the agent may stage larger story elements, which require human approval.
 
 ## Permission model
 

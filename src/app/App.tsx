@@ -17,7 +17,7 @@ import {
   UserPlus,
   X,
 } from '@phosphor-icons/react'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
 import { chooseNextSectionFill } from '../canvas/paintingModel'
 import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
@@ -60,7 +60,7 @@ function loadStoryState(): StoryState | undefined {
 }
 
 const SAMPLE_PROMPT =
-  'Paint with me in MythWeaver. Read the coloring canvas, choose two uncolored regions, and color them one at a time while I keep painting. Tell me what you changed.'
+  'Join my MythWeaver painting session through WebMCP and take the first turn. Read the live canvas, follow my turn rule, and choose each predefined section and color with visual judgment. Explain each choice briefly, paint only when it is an agent turn, and stop when the brush passes back to me.'
 
 function useStoryState(story: StoryStore) {
   return useSyncExternalStore(story.subscribe, story.getState, story.getState)
@@ -77,7 +77,8 @@ export function App() {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
   const [onboardingOpen, setOnboardingOpen] = useState(() => typeof window === 'undefined' || window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'true')
-  const [agentInvited, setAgentInvited] = useState(false)
+  const [agentRequested, setAgentRequested] = useState(false)
+  const [agentConnected, setAgentConnected] = useState(false)
   const [copied, setCopied] = useState(false)
   const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
@@ -86,7 +87,6 @@ export function App() {
   const state = useStoryState(story)
   const canvasState = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
   const turnState = useSyncExternalStore(turnSession.subscribe, turnSession.getState, turnSession.getState)
-  const agentBusy = useRef(false)
   const webMcpReady = typeof document !== 'undefined' && Boolean(document.modelContext)
 
   useEffect(
@@ -132,45 +132,13 @@ export function App() {
       canvas,
       turnSession,
       onAgentActivity: setAgentActivity,
+      onAgentJoined: () => {
+        setAgentConnected(true)
+        setAgentRequested(false)
+        setGuideOpen(false)
+      },
     })
   }, [canvas, story, turnSession])
-
-  useEffect(() => {
-    const participant = turnState.active
-    if (participant === 'human' || turnState.finished || agentBusy.current) return
-    const autoplay = agentInvited
-    if (!autoplay) return
-    const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
-    const move = chooseNextSectionFill(
-      canvas.getSnapshot().fills,
-      participant,
-      isAgentOnly ? undefined : { repaintIndex: turnState.round % 8 },
-    )
-    if (!move) {
-      if (isAgentOnly) turnSession.finish()
-      else turnSession.noteMove(participant)
-      setAgentActivity('Every predefined section is filled. Choose another rule to start a new round.')
-      return
-    }
-
-    agentBusy.current = true
-    const agentName = participant === 'agent-two' ? 'Mica' : 'ChatGPT'
-    canvas.showAgentPresence(`${agentName} is ready`, participant)
-    setAgentActivity(`${agentName} understands the scene and is moving to ${move.label}.`)
-    void (async () => {
-      await canvas.moveAgentToRegion(move.artifactId, `Coloring ${move.label}`, participant)
-      const current = turnSession.getState()
-      if (current.mode !== turnState.mode || current.round !== turnState.round || current.active !== participant) {
-        agentBusy.current = false
-        canvas.showAgentPresence(`${agentName} paused`, participant)
-        return
-      }
-      canvas.paintRegion(move.artifactId, move.color, participant)
-      turnSession.noteMove(participant)
-      setAgentActivity(`${agentName} colored ${move.label}.`)
-      agentBusy.current = false
-    })()
-  }, [agentInvited, canvas, canvasState.fills, turnSession, turnState])
 
   useEffect(() => {
     if (!playback || !canvas) return
@@ -190,25 +158,39 @@ export function App() {
     [state.contributions],
   )
 
-  const inviteAgent = () => {
-    setAgentInvited(true)
-    canvas.showAgentPresence('ChatGPT joined - choosing a section')
-    turnSession.startWith('agent')
-    setAgentActivity('ChatGPT joined the canvas and is choosing the first section to color.')
+  const inviteAgent = async () => {
+    setAgentRequested(true)
+    setGuideOpen(true)
+    setAgentActivity('Invitation ready. Send it in ChatGPT; the real agent appears only after its first WebMCP call.')
+    try {
+      await navigator.clipboard.writeText(SAMPLE_PROMPT)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      setCopied(false)
+    }
   }
 
   const finishOnboarding = (invite: boolean) => {
     window.localStorage.setItem(ONBOARDING_STORAGE_KEY, 'true')
     setOnboardingOpen(false)
     setGuideOpen(false)
-    if (invite) inviteAgent()
+    if (invite) void inviteAgent()
   }
 
-  const stageSample = () => {
+  const stageSample = async () => {
     if (state.pending) return
+    const move = chooseNextSectionFill(canvas.getSnapshot().fills, 'agent-two')
+    if (!move) {
+      setAgentActivity('Every predefined section is already filled.')
+      return
+    }
     setGuideOpen(false)
-    inviteAgent()
-    turnSession.setMode('agent-show')
+    canvas.showAgentPresence('Mica demo is choosing', 'agent-two')
+    setAgentActivity(`Mica demo chose ${move.label} using a deterministic local fallback.`)
+    await canvas.moveAgentToRegion(move.artifactId, `Demo: ${move.purpose}`, 'agent-two')
+    canvas.paintRegion(move.artifactId, move.color, 'agent-two')
+    setAgentActivity(`Mica demo colored ${move.label}. This preview did not use WebMCP.`)
   }
 
   const addStarter = () => {
@@ -248,7 +230,7 @@ export function App() {
     ? 'review'
     : agentHasPaint || canvasState.agentPresence || canvasState.agentTwoPresence || state.contributions.length > 0
       ? 'build'
-      : hasPaint || state.revision > 0
+      : agentRequested || hasPaint || state.revision > 0
         ? 'ask'
         : 'start'
 
@@ -267,9 +249,9 @@ export function App() {
 
         <div className="header-actions">
           {!canvasState.agentPresence && (
-            <button className="invite-agent-button" type="button" onClick={inviteAgent}>
+            <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()}>
               <UserPlus weight="bold" aria-hidden="true" />
-              <span>Invite ChatGPT</span>
+              <span>{agentRequested ? 'Invitation copied' : 'Invite ChatGPT'}</span>
             </button>
           )}
           <div className="collaborator-presence" aria-label={canvasState.agentTwoPresence ? 'You, ChatGPT, and Mica are in the canvas' : canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
@@ -333,7 +315,7 @@ export function App() {
           <aside className="pair-hint" aria-live="polite">
             <Robot weight="fill" aria-hidden="true" />
             <span><b>Your section is filled.</b> Invite ChatGPT to take the next turn.</span>
-            <button type="button" onClick={inviteAgent}>Invite ChatGPT</button>
+            <button type="button" onClick={() => void inviteAgent()}>{agentRequested ? 'Send in ChatGPT' : 'Invite ChatGPT'}</button>
           </aside>
         )}
 
@@ -346,6 +328,7 @@ export function App() {
             phase={phase}
             webMcpReady={webMcpReady}
             copied={copied}
+            agentRequested={agentRequested}
             onCopy={copyPrompt}
             onSample={stageSample}
             onStarter={addStarter}
@@ -368,10 +351,10 @@ export function App() {
           <SessionRulesPanel
             current={turnState.mode}
             onChoose={(mode) => {
-              if (mode === 'agent-show' || mode === 'agent-duo') inviteAgent()
               turnSession.setMode(mode)
               setRulesOpen(false)
-              setAgentActivity(`${SESSION_MODES[mode].label} started. ${participantTurnLabel(turnSession.getState().active)}.`)
+              setAgentActivity(`${SESSION_MODES[mode].label} is set. Ask ChatGPT to continue through WebMCP.`)
+              if ((mode === 'agent-show' || mode === 'agent-duo') && !agentConnected) void inviteAgent()
             }}
             onClose={() => setRulesOpen(false)}
           />
@@ -404,19 +387,19 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
         <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
         <p className="welcome-kicker">Your first painting</p>
         <h1 id="welcome-title">Color this page with ChatGPT</h1>
-        <p className="welcome-copy">Invite ChatGPT and it colors the first section immediately. Then you take turns choosing a color and filling one outlined section.</p>
+        <p className="welcome-copy">Invite the real ChatGPT agent through WebMCP. It reads this exact page, chooses one outlined section and color, explains why, then passes the brush to you.</p>
         <div className="consent-flow" aria-label="How pair painting works">
           <span><UserPlus weight="bold" aria-hidden="true" /> Invite ChatGPT</span>
-          <span><Robot weight="fill" aria-hidden="true" /> Watch its first fill</span>
+          <span><Robot weight="fill" aria-hidden="true" /> Send invite in chat</span>
           <span><PaintBucket weight="fill" aria-hidden="true" /> Take your turn</span>
         </div>
         <div className="welcome-paths">
           <button className="prompt-button" type="button" onClick={onInvite}>
-            <UserPlus weight="bold" aria-hidden="true" /> Invite ChatGPT and start
+            <UserPlus weight="bold" aria-hidden="true" /> Copy invite for ChatGPT
           </button>
           <button className="sample-button" type="button" onClick={onDismiss}>I’ll look around first</button>
         </div>
-        <p className="support-note">ChatGPT appears beside you when it joins. Its cursor shows exactly which section it is coloring.</p>
+        <p className="support-note">The page never fakes ChatGPT. Its avatar appears only after a real WebMCP call reaches the canvas.</p>
       </section>
     </div>
   )
@@ -511,6 +494,7 @@ function TurnGuide({
   phase,
   webMcpReady,
   copied,
+  agentRequested,
   onClose,
   onCopy,
   onSample,
@@ -520,6 +504,7 @@ function TurnGuide({
   phase: GuidePhase
   webMcpReady: boolean
   copied: boolean
+  agentRequested: boolean
   onClose: () => void
   onCopy: () => void
   onSample: () => void
@@ -545,7 +530,9 @@ function TurnGuide({
           ? 'Choose a color below, then tap one outlined section to fill it.'
           : isAsk
             ? webMcpReady
-              ? 'Send the line below in ChatGPT. WebMCP lets it color this same picture while you keep painting.'
+              ? agentRequested
+                ? 'Invitation copied. Paste it into ChatGPT. The avatar appears when ChatGPT reaches this canvas through WebMCP.'
+                : 'Send the line below in ChatGPT. WebMCP lets it read and color this same picture with you.'
               : 'Open this site inside ChatGPT to pair paint live. You can preview the rhythm here first.'
             : 'Your fills and ChatGPT’s fills appear on the same page as they happen. You both play by the same rule: one color, one section.'}
       </p>
@@ -560,20 +547,20 @@ function TurnGuide({
         {isAsk && (
           <button className="prompt-button" type="button" onClick={onCopy}>
             <Copy weight="bold" aria-hidden="true" />
-            {copied ? 'Prompt copied' : 'Copy this prompt'}
+            {copied ? 'Invitation copied — paste in chat' : 'Copy invitation'}
           </button>
         )}
         {isAsk && (
           <button className="sample-button" type="button" onClick={onSample}>
             <Sparkle weight="fill" aria-hidden="true" />
-            Watch a demo partner
+            Watch Mica demo one move
           </button>
         )}
         {isBuild && (
           <>
             <button className="prompt-button" type="button" onClick={onSample}>
               <Robot weight="fill" aria-hidden="true" />
-              Watch ChatGPT finish
+              Watch Mica demo one move
             </button>
             <button className="sample-button" type="button" onClick={onClose}>Keep painting</button>
           </>
