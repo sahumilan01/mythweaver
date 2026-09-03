@@ -5,7 +5,7 @@ import type {
   StoryStore,
 } from '../story/storyStore'
 import type { SessionParticipant, TurnSessionState } from '../session/turnSession'
-import { PAINT_ARTIFACTS, containsArtifactPoint } from '../canvas/paintingModel'
+import { PAINT_ARTIFACTS } from '../canvas/paintingModel'
 
 export interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -60,13 +60,6 @@ export interface ProposalDraft {
 export interface CanvasPort {
   readWorld(): { shapes: unknown[]; selection: string[]; regions?: unknown[]; artifacts?: unknown[]; [key: string]: unknown }
   paintRegion(regionId: string, color: string, origin: 'human' | 'agent' | 'agent-two'): void
-  addPaintStroke(
-    points: Array<{ x: number; y: number }>,
-    color: string,
-    width: number,
-    origin: 'human' | 'agent' | 'agent-two',
-    metadata?: { artifactId: string; detailId?: string; purpose: string; label?: string },
-  ): string
   undoLast(origin: 'human' | 'agent' | 'agent-two'): boolean
   clearPaint(origin: 'human' | 'agent' | 'agent-two'): void
   renderProposal(proposal: ProposalDraft): StoryProposal['elements']
@@ -272,7 +265,7 @@ export function registerMythWeaverTools({
     name: 'get_story_world',
     title: 'Read story world',
     description:
-      'Read the visible canvas before painting. Returns every named artifact with its bounds, center, current fill, suggested colors, available details, scene relationships, and next useful move.',
+      'Read the visible canvas before painting. Returns every predefined section with its bounds, center, current fill, suggested colors, scene relationships, and next valid fill.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: () => {
@@ -281,9 +274,9 @@ export function registerMythWeaverTools({
       const sessionState = turnSession?.getState()
       canvas.showAgentPresence('Reading the canvas')
       const filledRegions = world.regions?.filter((region) => object(region).fill).length ?? 0
-      onAgentActivity?.(`ChatGPT read the canvas: ${filledRegions} filled regions and ${world.shapes.length} freeform shapes at revision ${state.revision}.`)
+      onAgentActivity?.(`ChatGPT read the canvas: ${filledRegions} of ${world.regions?.length ?? 0} predefined sections are filled at revision ${state.revision}.`)
       return success(
-        `Story world revision ${state.revision}. ${filledRegions} filled regions, ${world.shapes.length} freeform shapes, and ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.${sessionState ? ` Session rule: ${sessionState.mode}; active participant: ${sessionState.active}; ${sessionState.movesRemaining} moves remaining.` : ''}`,
+        `Story world revision ${state.revision}. ${filledRegions} of ${world.regions?.length ?? 0} predefined sections are filled, and there is ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.${sessionState ? ` Session rule: ${sessionState.mode}; active participant: ${sessionState.active}; ${sessionState.movesRemaining} moves remaining.` : ''}`,
         {
           revision: state.revision,
           ...world,
@@ -306,7 +299,7 @@ export function registerMythWeaverTools({
       type: 'object',
       additionalProperties: false,
       properties: {
-        regionId: { type: 'string', description: 'Region ID returned by get_story_world.' },
+        regionId: { type: 'string', enum: PAINT_ARTIFACTS.map((artifact) => artifact.id), description: 'One predefined section ID returned by get_story_world.' },
         color: { type: 'string', description: 'Six-digit hex color such as #d9513f.' },
       },
       required: ['regionId', 'color'],
@@ -335,78 +328,9 @@ export function registerMythWeaverTools({
   })
 
   register({
-    name: 'add_canvas_stroke',
-    title: 'Add one brush stroke',
-    description:
-      'Add one purposeful detail to a named artifact. Read get_story_world first, keep every point within that artifact’s bounds, and explain the visual purpose. Do not draw generic marks in empty space.',
-    inputSchema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        points: {
-          type: 'array',
-          minItems: 2,
-          maxItems: 160,
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { x: { type: 'number' }, y: { type: 'number' } },
-            required: ['x', 'y'],
-          },
-        },
-        color: { type: 'string', description: 'Six-digit hex color.' },
-        width: { type: 'number', description: 'Brush width from 2 to 18.' },
-        artifactId: { type: 'string', enum: PAINT_ARTIFACTS.map((artifact) => artifact.id), description: 'The named artifact this stroke belongs to.' },
-        detailId: { type: 'string', description: 'Optional stable detail ID returned by get_story_world.' },
-        purpose: { type: 'string', description: 'What this mark adds, such as a river ripple or fox whiskers.' },
-      },
-      required: ['points', 'color', 'artifactId', 'purpose'],
-    },
-    execute: async (input) => {
-      try {
-        const root = object(input)
-        const rawPoints = Array.isArray(root.points) ? root.points : []
-        const points = rawPoints.map((raw, index) => {
-          const point = object(raw)
-          return {
-            x: number(point.x, `points[${index}].x`, 0, 1200),
-            y: number(point.y, `points[${index}].y`, 0, 700),
-          }
-        })
-        const paintColor = color(root.color)
-        const width = number(root.width ?? 6, 'width', 2, 18)
-        const artifactId = string(root.artifactId, 'artifactId', 48)
-        const purpose = string(root.purpose, 'purpose', 160)
-        const detailId = typeof root.detailId === 'string' ? string(root.detailId, 'detailId', 64) : undefined
-        const artifact = PAINT_ARTIFACTS.find((item) => item.id === artifactId)
-        if (!artifact) throw new Error(`Unknown artifact: ${artifactId}. Read get_story_world again.`)
-        if (!points.every((point) => containsArtifactPoint(artifactId, point))) {
-          throw new Error(`Every stroke point must stay within ${artifact.label}'s bounds. Read get_story_world for its location.`)
-        }
-        if (turnSession && !turnSession.canMove('agent')) {
-          throw new Error(`Wait for ChatGPT's turn. The active participant is ${turnSession.getState().active}.`)
-        }
-        if (points.length > 0) await canvas.moveAgentCursor(points[0], `Adding ${purpose}`)
-        const strokeId = canvas.addPaintStroke(points, paintColor, width, 'agent', { artifactId, detailId, purpose, label: purpose })
-        turnSession?.noteMove('agent')
-        onAgentActivity?.(`ChatGPT added ${purpose} to ${artifact.label}. It appeared on the shared canvas.`)
-        return success(`Added ${purpose} to ${artifact.label}. The person can see it now and the move can be undone.`, {
-          strokeId,
-          artifactId,
-          purpose,
-          pointCount: points.length,
-          world: canvas.readWorld(),
-        })
-      } catch (error) {
-        return failure(error)
-      }
-    },
-  })
-
-  register({
     name: 'undo_agent_paint',
     title: 'Undo last ChatGPT paint move',
-    description: 'Undo ChatGPT’s most recent reversible fill or brush stroke without changing the person’s paint.',
+    description: 'Undo ChatGPT’s most recent section fill without changing the person’s colors.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     execute: () => {
       const undone = canvas.undoLast('agent')
@@ -420,7 +344,7 @@ export function registerMythWeaverTools({
   register({
     name: 'clear_agent_paint',
     title: 'Clear ChatGPT paint',
-    description: 'Remove all paint added by ChatGPT while preserving every human fill and stroke.',
+    description: 'Remove every section fill added by ChatGPT while preserving the person’s colors.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { destructiveHint: true },
     execute: () => {

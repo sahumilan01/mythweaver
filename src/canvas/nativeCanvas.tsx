@@ -1,22 +1,12 @@
 import { ArrowCounterClockwise, Eraser, PencilSimple } from '@phosphor-icons/react'
 import {
-  useCallback,
-  useRef,
   useState,
   useSyncExternalStore,
   type CSSProperties,
-  type PointerEvent as ReactPointerEvent,
 } from 'react'
 import type { StoryBeat, StoryElement, StoryProposal } from '../story/storyStore'
 import type { CanvasPort, ProposalDraft, ProposalShape } from '../webmcp/registerTools'
-import {
-  ARTIFACT_DETAILS,
-  ARTIFACT_RELATIONS,
-  PAINT_ARTIFACTS,
-  SCENE_PALETTE,
-  chooseNextPaintMove,
-  isLegacySkyChevron,
-} from './paintingModel'
+import { ARTIFACT_RELATIONS, PAINT_ARTIFACTS, SCENE_PALETTE, chooseNextSectionFill } from './paintingModel'
 
 const CANVAS_STORAGE_KEY = 'mythweaver-pair-painting-v1'
 const VIEWBOX_WIDTH = 1200
@@ -43,11 +33,8 @@ type RegionFill = { color: string; origin: PaintOrigin }
 
 const REGION_CENTERS = Object.fromEntries(PAINT_ARTIFACTS.map((artifact) => [artifact.id, artifact.center])) as Record<RegionId, PaintPoint>
 
-export type PaintStrokeMetadata = { artifactId: string; detailId?: string; purpose: string; label?: string }
-
 type CanvasShape =
-  | { id: string; type: 'stroke'; origin: PaintOrigin; color: string; width: number; points: PaintPoint[]; artifactId?: RegionId; detailId?: string; purpose?: string; label?: string }
-  | {
+  {
       id: string
       type: 'geo'
       origin: PaintOrigin
@@ -74,7 +61,6 @@ export interface CanvasSnapshot {
 
 export interface NativeCanvasPort extends CanvasPort {
   addHumanStarter(): void
-  addPaintStroke(points: PaintPoint[], color: string, width: number, origin: PaintOrigin, metadata?: PaintStrokeMetadata): string
   paintRegion(regionId: string, color: string, origin: PaintOrigin): void
   clearPaint(origin: PaintOrigin): void
   undoLast(origin: PaintOrigin): boolean
@@ -95,13 +81,14 @@ const loadSnapshot = (): CanvasSnapshot => {
   if (typeof window === 'undefined') return EMPTY_SNAPSHOT
   try {
     const value = JSON.parse(window.localStorage.getItem(CANVAS_STORAGE_KEY) ?? '{}')
+    const rawShapes = Array.isArray(value.shapes) ? value.shapes : []
+    const shapes = rawShapes.filter((shape: { type?: string }) => shape?.type !== 'stroke') as CanvasShape[]
+    const removedFreehandMarks = shapes.length !== rawShapes.length
     return {
-      shapes: Array.isArray(value.shapes)
-        ? value.shapes.filter((shape: CanvasShape) => shape.type !== 'stroke' || shape.origin === 'human' || !isLegacySkyChevron(shape.points))
-        : [],
+      shapes,
       fills: value.fills && typeof value.fills === 'object' ? value.fills : {},
       focusedIds: [],
-      lastAction: value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two'
+      lastAction: !removedFreehandMarks && (value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two')
         ? value.lastAction
         : null,
       agentPresence: null,
@@ -164,32 +151,6 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     flash(region.id)
   }
 
-  const addPaintStroke = (points: PaintPoint[], color: string, width: number, origin: PaintOrigin, metadata?: PaintStrokeMetadata) => {
-    if (points.length < 2 || points.length > 160) throw new Error('A stroke needs between 2 and 160 points.')
-    const id = `${origin}-stroke-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    actions.push({
-      origin,
-      undo: () => publish({
-        ...snapshot,
-        shapes: snapshot.shapes.filter((shape) => shape.id !== id),
-        lastAction: { origin, label: `Undid ${origin === 'human' ? 'your' : `${originName(origin)}'s`} last stroke` },
-      }),
-    })
-    publish({
-      ...snapshot,
-      shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points, ...metadata, artifactId: metadata?.artifactId as RegionId | undefined }],
-      lastAction: { origin, label: metadata?.label ? `${originName(origin)} added ${metadata.label}` : `${originName(origin)} added a brush stroke` },
-      agentPresence: origin === 'agent' && snapshot.agentPresence
-        ? { ...snapshot.agentPresence, label: metadata?.label ? `Added ${metadata.label}` : 'Finished brush stroke' }
-        : snapshot.agentPresence,
-      agentTwoPresence: origin === 'agent-two' && snapshot.agentTwoPresence
-        ? { ...snapshot.agentTwoPresence, label: metadata?.label ? `Added ${metadata.label}` : 'Finished brush stroke' }
-        : snapshot.agentTwoPresence,
-    })
-    if (origin === 'human') announceHumanChange()
-    return id
-  }
-
   const showAgentPresence = (label: string, agentId: AgentId = 'agent') => {
     const key = agentId === 'agent' ? 'agentPresence' : 'agentTwoPresence'
     const current = snapshot[key]
@@ -242,7 +203,6 @@ export function createNativeCanvasPort(): NativeCanvasPort {
 
   return {
     addHumanStarter: () => paintRegion('moon', '#f0b343', 'human'),
-    addPaintStroke,
     paintRegion,
     clearPaint(origin) {
       const removedShapes = snapshot.shapes.filter((shape) => shape.origin === origin)
@@ -271,23 +231,20 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       return true
     },
     readWorld() {
-      const usedDetailIds = new Set(snapshot.shapes.flatMap((shape) => shape.type === 'stroke' && shape.detailId ? [shape.detailId] : []))
       return {
         canvas: { width: VIEWBOX_WIDTH, height: VIEWBOX_HEIGHT, coordinateSystem: 'top-left; x grows right, y grows down' },
         scene: { title: 'Moonlit fox', description: 'A coloring-book scene with a fox resting on a hill beside a winding river, under a moon and two stars.' },
         palette: SCENE_PALETTE,
         relations: ARTIFACT_RELATIONS,
-        suggestedNextMoves: [chooseNextPaintMove({ fills: snapshot.fills, usedDetailIds: [...usedDetailIds] }, 'agent')].filter(Boolean),
+        interactionRule: 'Choose a color and fill exactly one predefined section. Freehand lines are disabled for both humans and agents.',
+        suggestedNextMoves: [chooseNextSectionFill(snapshot.fills, 'agent')].filter(Boolean),
         selection: snapshot.focusedIds,
         regions: PAINT_REGIONS.map((region) => ({ id: region.id, name: region.label, fill: snapshot.fills[region.id] ?? null })),
         artifacts: PAINT_ARTIFACTS.map((artifact) => ({
           ...artifact,
           fill: snapshot.fills[artifact.id] ?? null,
-          availableDetails: ARTIFACT_DETAILS.filter((detail) => detail.artifactId === artifact.id && !usedDetailIds.has(detail.id)).map((detail) => ({ id: detail.id, label: detail.label, purpose: detail.purpose })),
         })),
-        shapes: snapshot.shapes.slice(0, 40).map((shape) => shape.type === 'stroke'
-          ? { id: shape.id, type: 'brush_stroke', origin: shape.origin, color: shape.color, width: shape.width, points: shape.points, artifactId: shape.artifactId ?? null, detailId: shape.detailId ?? null, purpose: shape.purpose ?? null }
-          : { id: shape.id, type: shape.geo, origin: shape.origin, status: shape.status, text: shape.label, elementId: shape.elementId }),
+        shapes: snapshot.shapes.slice(0, 40).map((shape) => ({ id: shape.id, type: shape.geo, origin: shape.origin, status: shape.status, text: shape.label, elementId: shape.elementId })),
       }
     },
     renderProposal: renderElements,
@@ -334,8 +291,6 @@ export function createNativeCanvasPort(): NativeCanvasPort {
   }
 }
 
-const pointsString = (points: PaintPoint[]) => points.map((point) => `${point.x},${point.y}`).join(' ')
-
 function Star({ shape }: { shape: Extract<CanvasShape, { type: 'geo' }> }) {
   const cx = shape.x + shape.w / 2
   const cy = shape.y + shape.h / 2
@@ -369,57 +324,17 @@ function GeoShape({ shape, focused }: { shape: Extract<CanvasShape, { type: 'geo
 
 export function NativeStoryCanvas({ canvas, humanCanPaint = true }: { canvas: NativeCanvasPort; humanCanPaint?: boolean }) {
   const snapshot = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
-  const [draft, setDraft] = useState<PaintPoint[]>([])
   const [color, setColor] = useState('#263f98')
-  const svgRef = useRef<SVGSVGElement>(null)
-
-  const pointFromEvent = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
-    const svg = svgRef.current
-    if (!svg) return null
-    const point = svg.createSVGPoint()
-    point.x = event.clientX
-    point.y = event.clientY
-    const matrix = svg.getScreenCTM()
-    if (!matrix) return null
-    const transformed = point.matrixTransform(matrix.inverse())
-    return { x: transformed.x, y: transformed.y }
-  }, [])
-
-  const startStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!humanCanPaint) return
-    if (event.target !== event.currentTarget && (event.target as Element).closest('.paint-region')) return
-    const point = pointFromEvent(event)
-    if (!point) return
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setDraft([point, point])
-  }
-  const continueStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (!humanCanPaint) return
-    if (draft.length === 0) return
-    const point = pointFromEvent(event)
-    if (point) setDraft((current) => current.length < 160 ? [...current, point] : current)
-  }
-  const finishStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (draft.length === 0) return
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-    canvas.addPaintStroke(draft, color, 6, 'human')
-    setDraft([])
-  }
-  const canUndo = snapshot.shapes.some((shape) => shape.origin === 'human') || Object.values(snapshot.fills).some((fill) => fill?.origin === 'human')
+  const canUndo = Object.values(snapshot.fills).some((fill) => fill?.origin === 'human')
 
   return (
     <div className={`native-canvas-shell ${humanCanPaint ? '' : 'is-agent-turn'}`}>
       <div className="live-paint-status" aria-live="polite"><i className={snapshot.lastAction?.origin === 'agent' ? 'is-agent' : ''} /><span>{snapshot.lastAction?.label ?? 'Outline ready. You can paint while ChatGPT joins in.'}</span></div>
       <svg
-        ref={svgRef}
         className="native-canvas"
         viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
         preserveAspectRatio="xMidYMid meet"
-        aria-label="Coloring book canvas. Tap a region to fill it, or drag to draw."
-        onPointerDown={startStroke}
-        onPointerMove={continueStroke}
-        onPointerUp={finishStroke}
-        onPointerCancel={() => setDraft([])}
+        aria-label="Coloring book canvas. Choose a color, then tap a section to fill it."
       >
         <rect className="native-canvas-paper" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} />
         {PAINT_REGIONS.map((region) => {
@@ -427,10 +342,7 @@ export function NativeStoryCanvas({ canvas, humanCanPaint = true }: { canvas: Na
           return <g key={region.id} className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : fill?.origin === 'agent-two' ? 'painted-by-agent-two' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}><path d={region.d} fill={fill?.color ?? '#fbfaf4'} onPointerDown={(event) => { event.stopPropagation(); if (humanCanPaint) canvas.paintRegion(region.id, color, 'human') }} /><title>{region.label}{fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : fill.origin === 'agent-two' ? 'Mica' : 'you'}` : ', uncolored'}</title></g>
         })}
         <g className="fox-details" aria-hidden="true"><circle cx="615" cy="348" r="6" /><circle cx="682" cy="348" r="6" /><path d="M635 373 Q648 385 661 373" /></g>
-        {snapshot.shapes.map((shape) => shape.type === 'stroke'
-          ? <polyline key={shape.id} className={shape.origin === 'agent' ? 'agent-stroke' : 'human-stroke'} points={pointsString(shape.points)} fill="none" stroke={shape.color} strokeWidth={shape.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-          : <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
-        {draft.length > 1 && <polyline points={pointsString(draft)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+        {snapshot.shapes.map((shape) => <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
         {([['agent', snapshot.agentPresence], ['agent-two', snapshot.agentTwoPresence]] as const).map(([agentId, presence]) => presence && (
           <g
             key={agentId}

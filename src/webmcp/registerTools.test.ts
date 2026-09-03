@@ -18,7 +18,6 @@ function createHarness(turnSession?: TurnSessionStore) {
     })),
   )
   const paintRegion = vi.fn()
-  const addPaintStroke = vi.fn(() => 'agent-stroke-1')
   const undoLast = vi.fn(() => true)
   const clearPaint = vi.fn()
   const showAgentPresence = vi.fn()
@@ -37,7 +36,6 @@ function createHarness(turnSession?: TurnSessionStore) {
       palette: [{ name: 'Moon gold', hex: '#f0b343' }],
     }),
     paintRegion,
-    addPaintStroke,
     undoLast,
     clearPaint,
     showAgentPresence,
@@ -61,7 +59,7 @@ function createHarness(turnSession?: TurnSessionStore) {
     turnSession,
   })
 
-  return { tools, renderProposal, paintRegion, addPaintStroke, undoLast, clearPaint, moveAgentToRegion }
+  return { tools, renderProposal, paintRegion, undoLast, clearPaint, moveAgentToRegion }
 }
 
 describe('MythWeaver WebMCP tools', () => {
@@ -71,7 +69,6 @@ describe('MythWeaver WebMCP tools', () => {
     expect([...tools.keys()]).toEqual([
       'get_story_world',
       'paint_canvas_region',
-      'add_canvas_stroke',
       'undo_agent_paint',
       'clear_agent_paint',
       'propose_story_patch',
@@ -128,43 +125,10 @@ describe('MythWeaver WebMCP tools', () => {
     expect(paintRegion).not.toHaveBeenCalled()
   })
 
-  it('lets the agent add and undo its own brush stroke', async () => {
-    const { tools, addPaintStroke, undoLast } = createHarness()
-
-    await tools.get('add_canvas_stroke')!.execute({
-      points: [{ x: 220, y: 140 }, { x: 240, y: 150 }],
-      color: '#d9513f',
-      width: 7,
-      artifactId: 'moon',
-      detailId: 'moon-crater',
-      purpose: 'a moon crater',
-    })
-    const result = await tools.get('undo_agent_paint')!.execute({})
-
-    expect(addPaintStroke).toHaveBeenCalledWith(
-      [{ x: 220, y: 140 }, { x: 240, y: 150 }],
-      '#d9513f',
-      7,
-      'agent',
-      { artifactId: 'moon', detailId: 'moon-crater', purpose: 'a moon crater', label: 'a moon crater' },
-    )
-    expect(undoLast).toHaveBeenCalledWith('agent')
-    expect(result.isError).not.toBe(true)
-  })
-
-  it('rejects generic or misplaced marks that are not grounded in an artifact', async () => {
-    const { tools, addPaintStroke } = createHarness()
-
-    const generic = await tools.get('add_canvas_stroke')!.execute({
-      points: [{ x: 840, y: 130 }, { x: 875, y: 104 }, { x: 910, y: 130 }],
-      color: '#d9513f',
-      artifactId: 'moon',
-      purpose: 'a decorative arrow',
-    })
-
-    expect(generic.isError).toBe(true)
-    expect(generic.content[0]?.text).toMatch(/within Moon's bounds/i)
-    expect(addPaintStroke).not.toHaveBeenCalled()
+  it('keeps the agent tool surface section-fill only', () => {
+    const { tools } = createHarness()
+    expect(tools.has('paint_canvas_region')).toBe(true)
+    expect(tools.has('add_canvas_stroke')).toBe(false)
   })
 
   it('rejects a stale proposal before drawing anything on the canvas', async () => {

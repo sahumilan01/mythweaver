@@ -391,15 +391,6 @@ button:disabled {
   pointer-events: none;
 }
 
-.human-stroke,
-.agent-stroke {
-  pointer-events: none;
-}
-
-.agent-stroke {
-  stroke-dasharray: 2 2;
-}
-
 .agent-live-cursor {
   pointer-events: none;
   transform-origin: 0 0;

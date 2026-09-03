@@ -37,20 +37,18 @@ describe('native pair-paint canvas', () => {
       description: expect.stringMatching(/fox head/i),
       center: { x: 648, y: 345 },
       bounds: { x: 520, y: 260, width: 256, height: 172 },
-      availableDetails: expect.arrayContaining([expect.objectContaining({ id: 'fox-whisker-left' })]),
     }))
     expect(world.suggestedNextMoves).toEqual([expect.objectContaining({ type: 'fill', artifactId: 'hill' })])
   })
 
-  it('recommends a purposeful artifact detail after every region has color', () => {
+  it('recommends no further paint move after every predefined section has color', () => {
     const canvas = createNativeCanvasPort()
     for (const id of ['hill', 'river', 'moon', 'star-one', 'star-two', 'fox-tail', 'fox-body', 'fox-head']) {
       canvas.paintRegion(id, '#263f98', 'human')
     }
 
-    expect(canvas.readWorld().suggestedNextMoves).toEqual([
-      expect.objectContaining({ type: 'detail', artifactId: 'moon', detailId: 'moon-crater', purpose: expect.stringMatching(/crater/i) }),
-    ])
+    expect(canvas.readWorld().suggestedNextMoves).toEqual([])
+    expect(canvas.readWorld().interactionRule).toMatch(/Freehand lines are disabled/i)
   })
 
   it('undoes only the requested collaborator’s latest move', () => {

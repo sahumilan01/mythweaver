@@ -17,7 +17,7 @@ import {
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
-import { chooseNextPaintMove } from '../canvas/paintingModel'
+import { chooseNextSectionFill } from '../canvas/paintingModel'
 import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
 import {
   createStoryStore,
@@ -135,16 +135,12 @@ export function App() {
     if (participant === 'human' || turnState.finished || agentBusy.current) return
     const autoplay = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo' || !webMcpReady
     if (!autoplay) return
-    const snapshot = canvas.getSnapshot()
-    const move = chooseNextPaintMove({
-      fills: snapshot.fills,
-      usedDetailIds: snapshot.shapes.flatMap((shape) => shape.type === 'stroke' && shape.detailId ? [shape.detailId] : []),
-    }, participant)
+    const move = chooseNextSectionFill(canvas.getSnapshot().fills, participant)
     const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
     if (!move) {
       if (isAgentOnly) turnSession.finish()
       else turnSession.noteMove(participant)
-      setAgentActivity('Every artifact and detail is complete. Choose another rule or keep painting freely.')
+      setAgentActivity('Every predefined section is filled. Choose another rule to start a new round.')
       return
     }
 
@@ -153,23 +149,16 @@ export function App() {
     canvas.showAgentPresence(`${agentName} is ready`, participant)
     setAgentActivity(`${agentName} understands the scene and is moving to ${move.label}.`)
     void (async () => {
-      if (move.type === 'fill') await canvas.moveAgentToRegion(move.artifactId, `Coloring ${move.label}`, participant)
-      else await canvas.moveAgentCursor(move.points[0], `Adding ${move.label}`, participant)
+      await canvas.moveAgentToRegion(move.artifactId, `Coloring ${move.label}`, participant)
       const current = turnSession.getState()
       if (current.mode !== turnState.mode || current.round !== turnState.round || current.active !== participant) {
         agentBusy.current = false
         canvas.showAgentPresence(`${agentName} paused`, participant)
         return
       }
-      if (move.type === 'fill') canvas.paintRegion(move.artifactId, move.color, participant)
-      else canvas.addPaintStroke(move.points, move.color, move.width, participant, {
-        artifactId: move.artifactId,
-        detailId: move.detailId,
-        purpose: move.purpose,
-        label: move.label,
-      })
+      canvas.paintRegion(move.artifactId, move.color, participant)
       turnSession.noteMove(participant)
-      setAgentActivity(`${agentName} ${move.type === 'fill' ? `colored ${move.label}` : `added ${move.label} to ${move.artifactId}`}.`)
+      setAgentActivity(`${agentName} colored ${move.label}.`)
       agentBusy.current = false
     })()
   }, [canvas, canvasState.fills, turnSession, turnState, webMcpReady])
@@ -490,12 +479,12 @@ function TurnGuide({
       <h1>{isStart ? 'Tap a shape to color it' : isAsk ? 'Invite ChatGPT to paint with you' : 'You’re painting together'}</h1>
       <p>
         {isStart
-          ? 'Choose a color below, then tap any part of the picture. You can also drag anywhere to draw.'
+          ? 'Choose a color below, then tap one outlined section to fill it.'
           : isAsk
             ? webMcpReady
               ? 'Send the line below in ChatGPT. WebMCP lets it color this same picture while you keep painting.'
               : 'Open this site inside ChatGPT to pair paint live. You can preview the rhythm here first.'
-            : 'Your marks and ChatGPT’s marks appear on the same page as they happen. Keep coloring, draw freely, or ask for a new direction.'}
+            : 'Your fills and ChatGPT’s fills appear on the same page as they happen. You both play by the same rule: one color, one section.'}
       </p>
       {isAsk && <blockquote>“Paint with me in MythWeaver. Read the coloring canvas, choose two uncolored regions, and color them one at a time while I keep painting. Tell me what you changed.”</blockquote>}
       <div className="turn-guide-actions">
@@ -557,7 +546,7 @@ function AdvancedPanel({
       <p>WebMCP is the bridge. It lets ChatGPT work in the same painting instead of describing changes from outside it.</p>
       <ol className="mcp-flow">
         <li><strong>The page names every paintable region.</strong><span>ChatGPT sees the moon, fox, stars, hill, and river.</span></li>
-        <li><strong>Each tool call becomes a visible move.</strong><span>ChatGPT can fill one region or add one brush stroke at a time.</span></li>
+        <li><strong>Each tool call becomes a visible move.</strong><span>ChatGPT chooses a color and fills one predefined section, just like you.</span></li>
         <li><strong>You can paint at the same time.</strong><span>Both kinds of marks share one reactive canvas.</span></li>
         <li><strong>Every paint move is reversible.</strong><span>You undo yours. ChatGPT can undo or clear its own paint.</span></li>
       </ol>
