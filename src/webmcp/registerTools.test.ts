@@ -31,7 +31,11 @@ function createHarness(turnSession?: TurnSessionStore) {
     },
   }
   const canvas: CanvasPort = {
-    readWorld: () => ({ shapes: [], selection: [], regions: [{ id: 'moon', name: 'Moon', fill: null }] }),
+    readWorld: () => ({
+      shapes: [], selection: [], regions: [{ id: 'moon', name: 'Moon', fill: null }],
+      artifacts: [{ id: 'moon', name: 'Moon', bounds: { x: 182, y: 82, width: 156, height: 156 }, suggestedColors: [{ name: 'Moon gold', hex: '#f0b343' }], fill: null }],
+      palette: [{ name: 'Moon gold', hex: '#f0b343' }],
+    }),
     paintRegion,
     addPaintStroke,
     undoLast,
@@ -85,7 +89,7 @@ describe('MythWeaver WebMCP tools', () => {
     const result = await tools.get('get_story_world')!.execute({})
 
     expect(result.structuredContent).toEqual(
-      expect.objectContaining({ revision: 0, shapes: [], selection: [] }),
+      expect.objectContaining({ revision: 0, shapes: [], selection: [], artifacts: expect.any(Array), palette: expect.any(Array) }),
     )
     expect(result.content[0]?.text).toMatch(/revision 0/i)
   })
@@ -128,15 +132,39 @@ describe('MythWeaver WebMCP tools', () => {
     const { tools, addPaintStroke, undoLast } = createHarness()
 
     await tools.get('add_canvas_stroke')!.execute({
-      points: [{ x: 10, y: 20 }, { x: 40, y: 50 }],
+      points: [{ x: 220, y: 140 }, { x: 240, y: 150 }],
       color: '#d9513f',
       width: 7,
+      artifactId: 'moon',
+      detailId: 'moon-crater',
+      purpose: 'a moon crater',
     })
     const result = await tools.get('undo_agent_paint')!.execute({})
 
-    expect(addPaintStroke).toHaveBeenCalledWith([{ x: 10, y: 20 }, { x: 40, y: 50 }], '#d9513f', 7, 'agent')
+    expect(addPaintStroke).toHaveBeenCalledWith(
+      [{ x: 220, y: 140 }, { x: 240, y: 150 }],
+      '#d9513f',
+      7,
+      'agent',
+      { artifactId: 'moon', detailId: 'moon-crater', purpose: 'a moon crater', label: 'a moon crater' },
+    )
     expect(undoLast).toHaveBeenCalledWith('agent')
     expect(result.isError).not.toBe(true)
+  })
+
+  it('rejects generic or misplaced marks that are not grounded in an artifact', async () => {
+    const { tools, addPaintStroke } = createHarness()
+
+    const generic = await tools.get('add_canvas_stroke')!.execute({
+      points: [{ x: 840, y: 130 }, { x: 875, y: 104 }, { x: 910, y: 130 }],
+      color: '#d9513f',
+      artifactId: 'moon',
+      purpose: 'a decorative arrow',
+    })
+
+    expect(generic.isError).toBe(true)
+    expect(generic.content[0]?.text).toMatch(/within Moon's bounds/i)
+    expect(addPaintStroke).not.toHaveBeenCalled()
   })
 
   it('rejects a stale proposal before drawing anything on the canvas', async () => {

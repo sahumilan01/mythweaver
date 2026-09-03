@@ -5,6 +5,7 @@ import type {
   StoryStore,
 } from '../story/storyStore'
 import type { SessionParticipant, TurnSessionState } from '../session/turnSession'
+import { PAINT_ARTIFACTS, containsArtifactPoint } from '../canvas/paintingModel'
 
 export interface ToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -57,13 +58,14 @@ export interface ProposalDraft {
 }
 
 export interface CanvasPort {
-  readWorld(): { shapes: unknown[]; selection: string[]; regions?: unknown[] }
+  readWorld(): { shapes: unknown[]; selection: string[]; regions?: unknown[]; artifacts?: unknown[]; [key: string]: unknown }
   paintRegion(regionId: string, color: string, origin: 'human' | 'agent' | 'agent-two'): void
   addPaintStroke(
     points: Array<{ x: number; y: number }>,
     color: string,
     width: number,
     origin: 'human' | 'agent' | 'agent-two',
+    metadata?: { artifactId: string; detailId?: string; purpose: string; label?: string },
   ): string
   undoLast(origin: 'human' | 'agent' | 'agent-two'): boolean
   clearPaint(origin: 'human' | 'agent' | 'agent-two'): void
@@ -270,7 +272,7 @@ export function registerMythWeaverTools({
     name: 'get_story_world',
     title: 'Read story world',
     description:
-      'Read the visible canvas, selection, committed contributions, current revision, and any proposal awaiting human review.',
+      'Read the visible canvas before painting. Returns every named artifact with its bounds, center, current fill, suggested colors, available details, scene relationships, and next useful move.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
     execute: () => {
@@ -299,7 +301,7 @@ export function registerMythWeaverTools({
     name: 'paint_canvas_region',
     title: 'Paint one coloring region',
     description:
-      'Immediately fill one named coloring-book region on the shared canvas. The move is visible and reversible.',
+      'Immediately fill one named coloring-book artifact on the shared canvas. Use its suggested colors from get_story_world. The move is visible and reversible.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -336,7 +338,7 @@ export function registerMythWeaverTools({
     name: 'add_canvas_stroke',
     title: 'Add one brush stroke',
     description:
-      'Immediately add one freehand brush stroke to the shared painting using canvas coordinates from 0 to 1200 by 0 to 700.',
+      'Add one purposeful detail to a named artifact. Read get_story_world first, keep every point within that artifact’s bounds, and explain the visual purpose. Do not draw generic marks in empty space.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -354,8 +356,11 @@ export function registerMythWeaverTools({
         },
         color: { type: 'string', description: 'Six-digit hex color.' },
         width: { type: 'number', description: 'Brush width from 2 to 18.' },
+        artifactId: { type: 'string', enum: PAINT_ARTIFACTS.map((artifact) => artifact.id), description: 'The named artifact this stroke belongs to.' },
+        detailId: { type: 'string', description: 'Optional stable detail ID returned by get_story_world.' },
+        purpose: { type: 'string', description: 'What this mark adds, such as a river ripple or fox whiskers.' },
       },
-      required: ['points', 'color'],
+      required: ['points', 'color', 'artifactId', 'purpose'],
     },
     execute: async (input) => {
       try {
@@ -370,16 +375,27 @@ export function registerMythWeaverTools({
         })
         const paintColor = color(root.color)
         const width = number(root.width ?? 6, 'width', 2, 18)
+        const artifactId = string(root.artifactId, 'artifactId', 48)
+        const purpose = string(root.purpose, 'purpose', 160)
+        const detailId = typeof root.detailId === 'string' ? string(root.detailId, 'detailId', 64) : undefined
+        const artifact = PAINT_ARTIFACTS.find((item) => item.id === artifactId)
+        if (!artifact) throw new Error(`Unknown artifact: ${artifactId}. Read get_story_world again.`)
+        if (!points.every((point) => containsArtifactPoint(artifactId, point))) {
+          throw new Error(`Every stroke point must stay within ${artifact.label}'s bounds. Read get_story_world for its location.`)
+        }
         if (turnSession && !turnSession.canMove('agent')) {
           throw new Error(`Wait for ChatGPT's turn. The active participant is ${turnSession.getState().active}.`)
         }
-        if (points.length > 0) await canvas.moveAgentCursor(points[0], 'Drawing a brush stroke')
-        const strokeId = canvas.addPaintStroke(points, paintColor, width, 'agent')
+        if (points.length > 0) await canvas.moveAgentCursor(points[0], `Adding ${purpose}`)
+        const strokeId = canvas.addPaintStroke(points, paintColor, width, 'agent', { artifactId, detailId, purpose, label: purpose })
         turnSession?.noteMove('agent')
-        onAgentActivity?.(`ChatGPT added a ${paintColor} brush stroke. It appeared on the shared canvas.`)
-        return success(`Added brush stroke ${strokeId}. The person can see it now and the move can be undone.`, {
+        onAgentActivity?.(`ChatGPT added ${purpose} to ${artifact.label}. It appeared on the shared canvas.`)
+        return success(`Added ${purpose} to ${artifact.label}. The person can see it now and the move can be undone.`, {
           strokeId,
+          artifactId,
+          purpose,
           pointCount: points.length,
+          world: canvas.readWorld(),
         })
       } catch (error) {
         return failure(error)

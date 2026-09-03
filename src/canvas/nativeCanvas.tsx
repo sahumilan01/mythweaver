@@ -9,6 +9,14 @@ import {
 } from 'react'
 import type { StoryBeat, StoryElement, StoryProposal } from '../story/storyStore'
 import type { CanvasPort, ProposalDraft, ProposalShape } from '../webmcp/registerTools'
+import {
+  ARTIFACT_DETAILS,
+  ARTIFACT_RELATIONS,
+  PAINT_ARTIFACTS,
+  SCENE_PALETTE,
+  chooseNextPaintMove,
+  isLegacySkyChevron,
+} from './paintingModel'
 
 const CANVAS_STORAGE_KEY = 'mythweaver-pair-painting-v1'
 const VIEWBOX_WIDTH = 1200
@@ -33,19 +41,12 @@ export const PAINT_REGIONS = [
 type RegionId = (typeof PAINT_REGIONS)[number]['id']
 type RegionFill = { color: string; origin: PaintOrigin }
 
-const REGION_CENTERS: Record<RegionId, PaintPoint> = {
-  hill: { x: 350, y: 520 },
-  river: { x: 830, y: 590 },
-  moon: { x: 260, y: 160 },
-  'star-one': { x: 104, y: 163 },
-  'star-two': { x: 438, y: 114 },
-  'fox-tail': { x: 820, y: 450 },
-  'fox-body': { x: 650, y: 440 },
-  'fox-head': { x: 648, y: 345 },
-}
+const REGION_CENTERS = Object.fromEntries(PAINT_ARTIFACTS.map((artifact) => [artifact.id, artifact.center])) as Record<RegionId, PaintPoint>
+
+export type PaintStrokeMetadata = { artifactId: string; detailId?: string; purpose: string; label?: string }
 
 type CanvasShape =
-  | { id: string; type: 'stroke'; origin: PaintOrigin; color: string; width: number; points: PaintPoint[] }
+  | { id: string; type: 'stroke'; origin: PaintOrigin; color: string; width: number; points: PaintPoint[]; artifactId?: RegionId; detailId?: string; purpose?: string; label?: string }
   | {
       id: string
       type: 'geo'
@@ -73,7 +74,7 @@ export interface CanvasSnapshot {
 
 export interface NativeCanvasPort extends CanvasPort {
   addHumanStarter(): void
-  addPaintStroke(points: PaintPoint[], color: string, width: number, origin: PaintOrigin): string
+  addPaintStroke(points: PaintPoint[], color: string, width: number, origin: PaintOrigin, metadata?: PaintStrokeMetadata): string
   paintRegion(regionId: string, color: string, origin: PaintOrigin): void
   clearPaint(origin: PaintOrigin): void
   undoLast(origin: PaintOrigin): boolean
@@ -95,10 +96,12 @@ const loadSnapshot = (): CanvasSnapshot => {
   try {
     const value = JSON.parse(window.localStorage.getItem(CANVAS_STORAGE_KEY) ?? '{}')
     return {
-      shapes: Array.isArray(value.shapes) ? value.shapes : [],
+      shapes: Array.isArray(value.shapes)
+        ? value.shapes.filter((shape: CanvasShape) => shape.type !== 'stroke' || shape.origin === 'human' || !isLegacySkyChevron(shape.points))
+        : [],
       fills: value.fills && typeof value.fills === 'object' ? value.fills : {},
       focusedIds: [],
-      lastAction: value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent'
+      lastAction: value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two'
         ? value.lastAction
         : null,
       agentPresence: null,
@@ -161,7 +164,7 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     flash(region.id)
   }
 
-  const addPaintStroke = (points: PaintPoint[], color: string, width: number, origin: PaintOrigin) => {
+  const addPaintStroke = (points: PaintPoint[], color: string, width: number, origin: PaintOrigin, metadata?: PaintStrokeMetadata) => {
     if (points.length < 2 || points.length > 160) throw new Error('A stroke needs between 2 and 160 points.')
     const id = `${origin}-stroke-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
     actions.push({
@@ -174,13 +177,13 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     })
     publish({
       ...snapshot,
-      shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points }],
-      lastAction: { origin, label: `${originName(origin)} added a brush stroke` },
+      shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points, ...metadata, artifactId: metadata?.artifactId as RegionId | undefined }],
+      lastAction: { origin, label: metadata?.label ? `${originName(origin)} added ${metadata.label}` : `${originName(origin)} added a brush stroke` },
       agentPresence: origin === 'agent' && snapshot.agentPresence
-        ? { ...snapshot.agentPresence, label: 'Finished brush stroke' }
+        ? { ...snapshot.agentPresence, label: metadata?.label ? `Added ${metadata.label}` : 'Finished brush stroke' }
         : snapshot.agentPresence,
       agentTwoPresence: origin === 'agent-two' && snapshot.agentTwoPresence
-        ? { ...snapshot.agentTwoPresence, label: 'Finished brush stroke' }
+        ? { ...snapshot.agentTwoPresence, label: metadata?.label ? `Added ${metadata.label}` : 'Finished brush stroke' }
         : snapshot.agentTwoPresence,
     })
     if (origin === 'human') announceHumanChange()
@@ -268,11 +271,22 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       return true
     },
     readWorld() {
+      const usedDetailIds = new Set(snapshot.shapes.flatMap((shape) => shape.type === 'stroke' && shape.detailId ? [shape.detailId] : []))
       return {
+        canvas: { width: VIEWBOX_WIDTH, height: VIEWBOX_HEIGHT, coordinateSystem: 'top-left; x grows right, y grows down' },
+        scene: { title: 'Moonlit fox', description: 'A coloring-book scene with a fox resting on a hill beside a winding river, under a moon and two stars.' },
+        palette: SCENE_PALETTE,
+        relations: ARTIFACT_RELATIONS,
+        suggestedNextMoves: [chooseNextPaintMove({ fills: snapshot.fills, usedDetailIds: [...usedDetailIds] }, 'agent')].filter(Boolean),
         selection: snapshot.focusedIds,
         regions: PAINT_REGIONS.map((region) => ({ id: region.id, name: region.label, fill: snapshot.fills[region.id] ?? null })),
+        artifacts: PAINT_ARTIFACTS.map((artifact) => ({
+          ...artifact,
+          fill: snapshot.fills[artifact.id] ?? null,
+          availableDetails: ARTIFACT_DETAILS.filter((detail) => detail.artifactId === artifact.id && !usedDetailIds.has(detail.id)).map((detail) => ({ id: detail.id, label: detail.label, purpose: detail.purpose })),
+        })),
         shapes: snapshot.shapes.slice(0, 40).map((shape) => shape.type === 'stroke'
-          ? { id: shape.id, type: 'brush_stroke', origin: shape.origin, color: shape.color, width: shape.width, points: shape.points }
+          ? { id: shape.id, type: 'brush_stroke', origin: shape.origin, color: shape.color, width: shape.width, points: shape.points, artifactId: shape.artifactId ?? null, detailId: shape.detailId ?? null, purpose: shape.purpose ?? null }
           : { id: shape.id, type: shape.geo, origin: shape.origin, status: shape.status, text: shape.label, elementId: shape.elementId }),
       }
     },

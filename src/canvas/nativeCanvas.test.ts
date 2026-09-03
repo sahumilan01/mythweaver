@@ -25,6 +25,34 @@ describe('native pair-paint canvas', () => {
     })
   })
 
+  it('gives WebMCP semantic artifacts, geometry, palette, relationships, and next moves', () => {
+    const canvas = createNativeCanvasPort()
+    const world = canvas.readWorld()
+    const artifacts = world.artifacts as Array<Record<string, unknown>>
+
+    expect(world.canvas).toEqual({ width: 1200, height: 700, coordinateSystem: 'top-left; x grows right, y grows down' })
+    expect(world.palette).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'Moon gold', hex: '#f0b343' })]))
+    expect(world.relations).toEqual(expect.arrayContaining([expect.objectContaining({ from: 'fox-body', relation: 'rests-on', to: 'hill' })]))
+    expect(artifacts.find((artifact) => artifact.id === 'fox-head')).toEqual(expect.objectContaining({
+      description: expect.stringMatching(/fox head/i),
+      center: { x: 648, y: 345 },
+      bounds: { x: 520, y: 260, width: 256, height: 172 },
+      availableDetails: expect.arrayContaining([expect.objectContaining({ id: 'fox-whisker-left' })]),
+    }))
+    expect(world.suggestedNextMoves).toEqual([expect.objectContaining({ type: 'fill', artifactId: 'hill' })])
+  })
+
+  it('recommends a purposeful artifact detail after every region has color', () => {
+    const canvas = createNativeCanvasPort()
+    for (const id of ['hill', 'river', 'moon', 'star-one', 'star-two', 'fox-tail', 'fox-body', 'fox-head']) {
+      canvas.paintRegion(id, '#263f98', 'human')
+    }
+
+    expect(canvas.readWorld().suggestedNextMoves).toEqual([
+      expect.objectContaining({ type: 'detail', artifactId: 'moon', detailId: 'moon-crater', purpose: expect.stringMatching(/crater/i) }),
+    ])
+  })
+
   it('undoes only the requested collaborator’s latest move', () => {
     const canvas = createNativeCanvasPort()
     canvas.paintRegion('moon', '#f0b343', 'human')

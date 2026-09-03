@@ -16,7 +16,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { createNativeCanvasPort, NativeStoryCanvas, PAINT_REGIONS } from '../canvas/nativeCanvas'
+import { createNativeCanvasPort, NativeStoryCanvas } from '../canvas/nativeCanvas'
+import { chooseNextPaintMove } from '../canvas/paintingModel'
 import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
 import {
   createStoryStore,
@@ -57,15 +58,6 @@ function loadStoryState(): StoryState | undefined {
 
 const SAMPLE_PROMPT =
   'Paint with me in MythWeaver. Read the coloring canvas, choose two uncolored regions, and color them one at a time while I keep painting. Tell me what you changed.'
-
-const AGENT_SKY_STROKES = [
-  [{ x: 840, y: 130 }, { x: 875, y: 104 }, { x: 910, y: 130 }],
-  [{ x: 935, y: 205 }, { x: 970, y: 177 }, { x: 1008, y: 205 }],
-  [{ x: 720, y: 155 }, { x: 750, y: 128 }, { x: 782, y: 155 }],
-  [{ x: 315, y: 275 }, { x: 350, y: 248 }, { x: 386, y: 275 }],
-  [{ x: 1020, y: 300 }, { x: 1050, y: 274 }, { x: 1082, y: 300 }],
-  [{ x: 480, y: 190 }, { x: 515, y: 164 }, { x: 550, y: 190 }],
-] as const
 
 function useStoryState(story: StoryStore) {
   return useSyncExternalStore(story.subscribe, story.getState, story.getState)
@@ -143,33 +135,41 @@ export function App() {
     if (participant === 'human' || turnState.finished || agentBusy.current) return
     const autoplay = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo' || !webMcpReady
     if (!autoplay) return
-    const region = PAINT_REGIONS.find((item) => !canvas.getSnapshot().fills[item.id])
+    const snapshot = canvas.getSnapshot()
+    const move = chooseNextPaintMove({
+      fills: snapshot.fills,
+      usedDetailIds: snapshot.shapes.flatMap((shape) => shape.type === 'stroke' && shape.detailId ? [shape.detailId] : []),
+    }, participant)
     const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
-    if (!region && isAgentOnly && turnState.round > AGENT_SKY_STROKES.length) {
-      turnSession.finish()
-      setAgentActivity('The round is complete. Choose another rule whenever you want to play again.')
+    if (!move) {
+      if (isAgentOnly) turnSession.finish()
+      else turnSession.noteMove(participant)
+      setAgentActivity('Every artifact and detail is complete. Choose another rule or keep painting freely.')
       return
     }
 
     agentBusy.current = true
     const agentName = participant === 'agent-two' ? 'Mica' : 'ChatGPT'
-    const paintColor = participant === 'agent-two' ? '#247c63' : '#d9513f'
-    const stroke = AGENT_SKY_STROKES[(turnState.round - 1) % AGENT_SKY_STROKES.length]
     canvas.showAgentPresence(`${agentName} is ready`, participant)
-    setAgentActivity(region ? `${agentName} is moving to ${region.label}.` : `${agentName} is drawing in the open sky.`)
+    setAgentActivity(`${agentName} understands the scene and is moving to ${move.label}.`)
     void (async () => {
-      if (region) await canvas.moveAgentToRegion(region.id, `Painting ${region.label}`, participant)
-      else await canvas.moveAgentCursor(stroke[0], 'Drawing in the open sky', participant)
+      if (move.type === 'fill') await canvas.moveAgentToRegion(move.artifactId, `Coloring ${move.label}`, participant)
+      else await canvas.moveAgentCursor(move.points[0], `Adding ${move.label}`, participant)
       const current = turnSession.getState()
       if (current.mode !== turnState.mode || current.round !== turnState.round || current.active !== participant) {
         agentBusy.current = false
         canvas.showAgentPresence(`${agentName} paused`, participant)
         return
       }
-      if (region) canvas.paintRegion(region.id, paintColor, participant)
-      else canvas.addPaintStroke([...stroke], paintColor, 7, participant)
+      if (move.type === 'fill') canvas.paintRegion(move.artifactId, move.color, participant)
+      else canvas.addPaintStroke(move.points, move.color, move.width, participant, {
+        artifactId: move.artifactId,
+        detailId: move.detailId,
+        purpose: move.purpose,
+        label: move.label,
+      })
       turnSession.noteMove(participant)
-      setAgentActivity(region ? `${agentName} colored ${region.label}.` : `${agentName} added a stroke to the sky.`)
+      setAgentActivity(`${agentName} ${move.type === 'fill' ? `colored ${move.label}` : `added ${move.label} to ${move.artifactId}`}.`)
       agentBusy.current = false
     })()
   }, [canvas, canvasState.fills, turnSession, turnState, webMcpReady])
