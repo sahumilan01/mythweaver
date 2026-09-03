@@ -9,7 +9,6 @@ import {
   Info,
   MoonStars,
   PaintBucket,
-  Palette,
   PencilSimpleLine,
   Play,
   Robot,
@@ -141,8 +140,12 @@ export function App() {
     if (participant === 'human' || turnState.finished || agentBusy.current) return
     const autoplay = agentInvited
     if (!autoplay) return
-    const move = chooseNextSectionFill(canvas.getSnapshot().fills, participant)
     const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
+    const move = chooseNextSectionFill(
+      canvas.getSnapshot().fills,
+      participant,
+      isAgentOnly ? undefined : { repaintIndex: turnState.round % 8 },
+    )
     if (!move) {
       if (isAgentOnly) turnSession.finish()
       else turnSession.noteMove(participant)
@@ -189,8 +192,9 @@ export function App() {
 
   const inviteAgent = () => {
     setAgentInvited(true)
-    canvas.showAgentPresence('ChatGPT joined - waiting for you')
-    setAgentActivity('ChatGPT joined the canvas. Fill one section, then ChatGPT will take the next turn.')
+    canvas.showAgentPresence('ChatGPT joined - choosing a section')
+    turnSession.startWith('agent')
+    setAgentActivity('ChatGPT joined the canvas and is choosing the first section to color.')
   }
 
   const finishOnboarding = (invite: boolean) => {
@@ -400,11 +404,11 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
         <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
         <p className="welcome-kicker">Your first painting</p>
         <h1 id="welcome-title">Color this page with ChatGPT</h1>
-        <p className="welcome-copy">You both make the same simple move. Pick a color, fill one outlined section, then pass the turn.</p>
+        <p className="welcome-copy">Invite ChatGPT and it colors the first section immediately. Then you take turns choosing a color and filling one outlined section.</p>
         <div className="consent-flow" aria-label="How pair painting works">
-          <span><Palette weight="fill" aria-hidden="true" /> Pick a color</span>
-          <span><PaintBucket weight="fill" aria-hidden="true" /> Fill one section</span>
-          <span><Robot weight="fill" aria-hidden="true" /> Pass the turn</span>
+          <span><UserPlus weight="bold" aria-hidden="true" /> Invite ChatGPT</span>
+          <span><Robot weight="fill" aria-hidden="true" /> Watch its first fill</span>
+          <span><PaintBucket weight="fill" aria-hidden="true" /> Take your turn</span>
         </div>
         <div className="welcome-paths">
           <button className="prompt-button" type="button" onClick={onInvite}>

@@ -40,15 +40,21 @@ export type SectionFillMove = {
 export function chooseNextSectionFill(
   fills: Partial<Record<ArtifactId, { color: string }>>,
   participant: PaintingParticipant,
+  options?: { repaintIndex: number },
 ): SectionFillMove | null {
   const open = PAINT_ARTIFACTS.find((artifact) => !fills[artifact.id])
+    ?? (options ? PAINT_ARTIFACTS[options.repaintIndex % PAINT_ARTIFACTS.length] : null)
   if (!open) return null
-  const paletteIndex = participant === 'agent-two' && open.suggestedColors.length > 1 ? 1 : 0
+  const preferredIndex = participant === 'agent-two' && open.suggestedColors.length > 1 ? 1 : 0
+  const preferred = open.suggestedColors[preferredIndex]
+  const paintColor = preferred.hex === fills[open.id]?.color
+    ? open.suggestedColors.find((option) => option.hex !== fills[open.id]?.color) ?? preferred
+    : preferred
   return {
     type: 'fill',
     artifactId: open.id,
     label: open.label,
-    color: open.suggestedColors[paletteIndex].hex,
+    color: paintColor.hex,
     purpose: `Fill the ${open.label} section`,
   }
 }

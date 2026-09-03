@@ -11,6 +11,16 @@ describe('turn session', () => {
     expect(session.getState().active).toBe('human')
   })
 
+  it('starts with an immediate agent turn when the agent is invited', () => {
+    const session = createTurnSessionStore('one-one')
+
+    session.startWith('agent')
+
+    expect(session.getState()).toMatchObject({ active: 'agent', movesRemaining: 1, finished: false })
+    session.noteMove('agent')
+    expect(session.getState().active).toBe('human')
+  })
+
   it('counts two moves before passing the brush', () => {
     const session = createTurnSessionStore('two-two')
     session.noteMove('human')

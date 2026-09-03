@@ -24,4 +24,12 @@ describe('section-fill painting model', () => {
     const fills = Object.fromEntries(PAINT_ARTIFACTS.map((artifact) => [artifact.id, { color: '#263f98' }]))
     expect(chooseNextSectionFill(fills, 'agent')).toBeNull()
   })
+
+  it('can recolor one section on an invited agent turn when the page is already full', () => {
+    const fills = Object.fromEntries(PAINT_ARTIFACTS.map((artifact) => [artifact.id, { color: '#263f98' }]))
+
+    const move = chooseNextSectionFill(fills, 'agent', { repaintIndex: 2 })
+
+    expect(move).toEqual(expect.objectContaining({ type: 'fill', artifactId: 'moon', color: '#f0b343' }))
+  })
 })

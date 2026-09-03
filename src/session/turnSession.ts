@@ -13,6 +13,7 @@ export interface TurnSessionStore {
   getState(): TurnSessionState
   subscribe(listener: () => void): () => void
   setMode(mode: SessionMode): void
+  startWith(participant: SessionParticipant): void
   canMove(participant: SessionParticipant): boolean
   noteMove(participant: SessionParticipant): boolean
   finish(): void
@@ -69,6 +70,15 @@ export function createTurnSessionStore(initialMode: SessionMode = 'one-one'): Tu
     },
     setMode(mode) {
       publish(initialFor(mode))
+    },
+    startWith(participant) {
+      publish({
+        ...state,
+        active: participant,
+        movesRemaining: state.mode === 'two-two' ? 2 : 1,
+        round: 1,
+        finished: false,
+      })
     },
     canMove: (participant) => !state.finished && state.active === participant,
     noteMove(participant) {
