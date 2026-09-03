@@ -1,87 +1,72 @@
 # MythWeaver
 
-MythWeaver is a consent-based creative canvas where a person and a browser agent take visible turns turning drawn symbols into a playable story world.
+MythWeaver is a live pair-painting canvas for a person and ChatGPT. It begins like a coloring book: choose a color, tap an outlined region, or drag to draw. A WebMCP-capable agent can read the same page and add visible fills or brush strokes while the person keeps painting.
 
-The person draws with tldraw. A WebMCP-capable browser agent reads the live canvas, places a structured proposal beside the person's marks, and can revise it after feedback. Only the person can accept or discard the contribution.
+## The collaboration model
 
-## What works
-
-- Full tldraw canvas with local persistence
-- Five imperative WebMCP tools
-- Agent proposals rendered as orange dashed shapes
-- Human-only accept and discard controls
-- Visible contribution provenance
-- Three-beat story performance with semantic camera focus
-- Story metadata persistence across reloads
-- Responsive light and dark interface
-- Sample proposal for testing without a WebMCP browser
+- Human paint and ChatGPT paint appear immediately on one shared canvas.
+- Every region has a stable name, so an agent can paint the fox or river without guessing screen coordinates.
+- The activity strip says who changed what. ChatGPT paint also uses a coral outline.
+- Human undo affects human paint. Agent undo and clear affect agent paint only.
+- Low-risk, reversible paint moves happen live. Larger story additions remain proposals that only the person can keep or remove.
+- The native SVG canvas has no production license dependency and persists locally across reloads.
 
 ## WebMCP tools
 
 | Tool | Purpose |
 |---|---|
-| `get_story_world` | Read visible shapes, selection, story state, revision, and consent rules |
-| `propose_story_patch` | Add one reviewable contribution with up to eight elements and three beats |
-| `revise_story_patch` | Replace the current pending proposal after human feedback |
-| `focus_story_elements` | Navigate to elements by semantic IDs instead of screen coordinates |
-| `preview_story_performance` | Play committed story beats without mutating the artifact |
+| `get_story_world` | Read named regions, fills, strokes, story state, and revision |
+| `paint_canvas_region` | Fill one named region immediately |
+| `add_canvas_stroke` | Add one visible freehand stroke |
+| `undo_agent_paint` | Undo ChatGPT's latest paint move only |
+| `clear_agent_paint` | Clear ChatGPT paint while preserving human work |
+| `propose_story_patch` | Stage a larger story contribution for human review |
+| `revise_story_patch` | Revise the pending story proposal |
+| `focus_story_elements` | Focus accepted story elements by semantic ID |
+| `preview_story_performance` | Play committed story beats without changing the work |
 
-There is intentionally no WebMCP tool for accepting, discarding, or resetting work. Creative consent remains a human action in the visible interface.
+There is no agent tool for accepting or discarding story proposals. That decision stays in the visible UI.
 
 ## Run locally
 
-Requirements: Node.js `^20.19.0` or `>=22.12.0`.
+Requires Node.js `^20.19.0` or `>=22.12.0`.
 
 ```bash
 npm install
-cp .env.example .env
 npm run dev
 ```
 
-The app runs without a tldraw key on localhost. For a production deployment, add a valid trial, hobby, or commercial key:
-
-```bash
-NEXT_PUBLIC_TLDRAW_LICENSE_KEY=your-key
-```
-
-Open the deployed ChatGPT Site in ChatGPT's browser or WebMCP-enabled Chrome. Draw something, then use the prompt offered in the welcome panel.
+Open the site in ChatGPT or a WebMCP-enabled browser. Tap **Color the moon**, then ask ChatGPT to paint with you. **Watch a demo partner** shows the same live rhythm without an attached agent.
 
 ## Verify
 
 ```bash
 npm test
+npx tsc --noEmit
 npm run build
 ```
 
-Tests cover the consent state machine, stale revision protection, proposal revision, persistence, and registered WebMCP tool surface.
+Tests cover the shared human/agent paint world, origin-specific undo, tool validation, consent state, stale revision protection, persistence, and the registered WebMCP surface.
 
 ## Architecture
 
 ```text
-Browser agent
-    |
-    | WebMCP tools
-    v
-registerTools.ts
-    |
-    +--> StoryStore: revision, pending proposal, contributions, beats
-    |
-    +--> CanvasPort: reads and updates the shared tldraw editor
-                         |
-                         v
-                    Visible human UI
+ChatGPT
+   | WebMCP: read, fill, stroke, undo
+   v
+CanvasPort --------> native SVG canvas
+   |                       ^
+   |                       | tap, drag, undo
+   +--> StoryStore      person
+        proposals and consent
 ```
 
-The agent reasons about the story. Tool code validates and applies primitive canvas operations. Agent writes appear immediately in the same workspace the person edits.
+## First-version limits
 
-## Known first-version limits
-
-- No multiplayer or cloud sync
-- No embedded model or chat panel
-- Story performances use camera focus and narration, not a general animation timeline
-- Human-drawn marks are returned as compact shape data; the external agent supplies interpretation
-- A production deployment requires a valid tldraw license key
+- Collaboration is between the local page and its attached browser agent; there is no remote multiplayer sync.
+- Chat lives in ChatGPT rather than inside the canvas.
+- Story performances are short narrated beats, not a general animation timeline.
 
 ## License
 
-Project-authored code is available under the MIT License. tldraw and other dependencies retain their own licenses and terms.
+Project-authored code is available under the MIT License. Dependencies retain their own licenses and terms.

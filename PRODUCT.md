@@ -1,33 +1,44 @@
 # Product
 
-## Register
-
-product
-
 ## Users
 
-Young storytellers, families, educators, creative teams, and hackathon judges who open MythWeaver inside ChatGPT or a WebMCP-capable browser. They need to understand the shared canvas without knowing what WebMCP is, then gain confidence as the collaboration becomes more capable.
+Children, families, educators, creative teams, and hackathon judges who open MythWeaver inside ChatGPT or a WebMCP-capable browser. They should not need to know what WebMCP is before making the first mark.
 
-## Product Purpose
+## Product purpose
 
-MythWeaver lets a person and a browser agent build a visual story through visible turns. The person makes marks and owns every commitment. The agent reads the canvas, explains its interpretation, and stages proposals that remain separate until the person accepts them. Success means a new user can begin in seconds, always knows whose turn it is, and can inspect the underlying WebMCP mechanics when ready.
+MythWeaver makes human-agent collaboration feel like pair programming, but on a coloring page. The person and ChatGPT share one live artifact. Either can make the next small move; the other can see it as it happens and build on it.
 
-## Brand Personality
+Success means a new user paints within seconds, always knows who made the latest change, and can invite the agent without leaving a blank or blocked canvas.
+
+## Interaction ladder
+
+1. Start: the page offers one obvious action, **Color the moon**.
+2. Pair: the canvas opens up and tells the person what to ask ChatGPT.
+3. Collaborate: both sides fill named regions or add strokes in real time.
+4. Direct: the person asks for moods, palettes, or specific regions.
+5. Compose: the agent may stage larger story elements, which require human approval.
+
+## Permission model
+
+The risk of the action determines the interaction. Small paint moves are instant because they are visible and reversible. Structural story additions are proposals because they affect the meaning of the shared work. Human and agent undo are separate, so neither collaborator accidentally erases the other's work.
+
+## Brand personality
 
 Playful, candid, and encouraging. It speaks like a calm creative partner, not a technical console or an autonomous bot.
 
 ## Anti-references
 
-Do not resemble a generic analytics dashboard, an AI chat wrapper, or a developer tool that leads with protocols and tool names. Avoid opaque automation, purple AI gradients, decorative glass panels, and onboarding that explains everything before the first useful action.
+Do not resemble a generic analytics dashboard, an AI chat wrapper, or a developer tool that leads with protocols. Avoid opaque automation, decorative AI gradients, and onboarding that hides the canvas after the first action.
 
-## Design Principles
+## Design principles
 
 1. Start with one obvious action.
-2. Narrate the turn: human, agent, then human decision.
-3. Show agent work before asking for trust.
-4. Reveal technical depth only when requested.
-5. Keep consent visible at the exact moment it matters.
+2. Keep the shared artifact visible.
+3. Say who is doing what now.
+4. Make small agent moves immediate and reversible.
+5. Reveal technical depth only when requested.
+6. Keep human consent at the moment a change becomes structural.
 
-## Accessibility & Inclusion
+## Accessibility and inclusion
 
-Use plain language, keyboard-visible focus, WCAG-aware contrast, touch-sized controls, reduced-motion support, and redundant labels so provenance never depends on color alone.
+Use plain language, keyboard-visible focus, strong contrast, touch-sized controls, reduced-motion support, and text labels so authorship never depends on color alone.

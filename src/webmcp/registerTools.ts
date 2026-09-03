@@ -16,7 +16,7 @@ export interface RegisteredTool {
   title: string
   description: string
   inputSchema: Record<string, unknown>
-  annotations?: { readOnlyHint?: boolean; untrustedContentHint?: boolean }
+  annotations?: { readOnlyHint?: boolean; untrustedContentHint?: boolean; destructiveHint?: boolean }
   execute(input: unknown): Promise<ToolResult> | ToolResult
 }
 
@@ -56,7 +56,16 @@ export interface ProposalDraft {
 }
 
 export interface CanvasPort {
-  readWorld(): { shapes: unknown[]; selection: string[] }
+  readWorld(): { shapes: unknown[]; selection: string[]; regions?: unknown[] }
+  paintRegion(regionId: string, color: string, origin: 'human' | 'agent'): void
+  addPaintStroke(
+    points: Array<{ x: number; y: number }>,
+    color: string,
+    width: number,
+    origin: 'human' | 'agent',
+  ): string
+  undoLast(origin: 'human' | 'agent'): boolean
+  clearPaint(origin: 'human' | 'agent'): void
   renderProposal(proposal: ProposalDraft): StoryProposal['elements']
   replaceProposal(
     previous: StoryProposal,
@@ -103,6 +112,14 @@ const number = (value: unknown, field: string, min: number, max: number) => {
     throw new Error(`${field} must be a finite number.`)
   }
   return Math.min(max, Math.max(min, value))
+}
+
+const color = (value: unknown) => {
+  const parsed = string(value, 'color', 7)
+  if (!/^#[0-9a-f]{6}$/i.test(parsed)) {
+    throw new Error('color must be a six-digit hex value such as #d9513f.')
+  }
+  return parsed
 }
 
 function parseDraft(input: unknown, expectedProposalId?: string): ProposalDraft {
@@ -249,9 +266,10 @@ export function registerMythWeaverTools({
     execute: () => {
       const state = story.getState()
       const world = canvas.readWorld()
-      onAgentActivity?.(`ChatGPT read ${world.shapes.length} canvas ${world.shapes.length === 1 ? 'shape' : 'shapes'} at revision ${state.revision}.`)
+      const filledRegions = world.regions?.filter((region) => object(region).fill).length ?? 0
+      onAgentActivity?.(`ChatGPT read the canvas: ${filledRegions} filled regions and ${world.shapes.length} freeform shapes at revision ${state.revision}.`)
       return success(
-        `Story world revision ${state.revision}. ${world.shapes.length} visible shapes and ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.`,
+        `Story world revision ${state.revision}. ${filledRegions} filled regions, ${world.shapes.length} freeform shapes, and ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.`,
         {
           revision: state.revision,
           ...world,
@@ -261,6 +279,115 @@ export function registerMythWeaverTools({
             'You may propose or revise. Only the person can accept or discard in the canvas UI.',
         },
       )
+    },
+  })
+
+  register({
+    name: 'paint_canvas_region',
+    title: 'Paint one coloring region',
+    description:
+      'Immediately fill one named coloring-book region on the shared canvas. The move is visible and reversible.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        regionId: { type: 'string', description: 'Region ID returned by get_story_world.' },
+        color: { type: 'string', description: 'Six-digit hex color such as #d9513f.' },
+      },
+      required: ['regionId', 'color'],
+    },
+    execute: (input) => {
+      try {
+        const root = object(input)
+        const regionId = string(root.regionId, 'regionId', 48)
+        const paintColor = color(root.color)
+        canvas.paintRegion(regionId, paintColor, 'agent')
+        onAgentActivity?.(`ChatGPT colored ${regionId} ${paintColor}. The move appeared on the shared canvas.`)
+        return success(`Painted ${regionId} ${paintColor}. The person can see it now and the move can be undone.`, {
+          regionId,
+          color: paintColor,
+          world: canvas.readWorld(),
+        })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  })
+
+  register({
+    name: 'add_canvas_stroke',
+    title: 'Add one brush stroke',
+    description:
+      'Immediately add one freehand brush stroke to the shared painting using canvas coordinates from 0 to 1200 by 0 to 700.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        points: {
+          type: 'array',
+          minItems: 2,
+          maxItems: 160,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+            required: ['x', 'y'],
+          },
+        },
+        color: { type: 'string', description: 'Six-digit hex color.' },
+        width: { type: 'number', description: 'Brush width from 2 to 18.' },
+      },
+      required: ['points', 'color'],
+    },
+    execute: (input) => {
+      try {
+        const root = object(input)
+        const rawPoints = Array.isArray(root.points) ? root.points : []
+        const points = rawPoints.map((raw, index) => {
+          const point = object(raw)
+          return {
+            x: number(point.x, `points[${index}].x`, 0, 1200),
+            y: number(point.y, `points[${index}].y`, 0, 700),
+          }
+        })
+        const paintColor = color(root.color)
+        const width = number(root.width ?? 6, 'width', 2, 18)
+        const strokeId = canvas.addPaintStroke(points, paintColor, width, 'agent')
+        onAgentActivity?.(`ChatGPT added a ${paintColor} brush stroke. It appeared on the shared canvas.`)
+        return success(`Added brush stroke ${strokeId}. The person can see it now and the move can be undone.`, {
+          strokeId,
+          pointCount: points.length,
+        })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  })
+
+  register({
+    name: 'undo_agent_paint',
+    title: 'Undo last ChatGPT paint move',
+    description: 'Undo ChatGPT’s most recent reversible fill or brush stroke without changing the person’s paint.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    execute: () => {
+      const undone = canvas.undoLast('agent')
+      onAgentActivity?.(undone ? 'ChatGPT undid its last paint move.' : 'ChatGPT had no paint move to undo.')
+      return undone
+        ? success('Undid ChatGPT’s last paint move.', { world: canvas.readWorld() })
+        : failure(new Error('There is no ChatGPT paint move to undo.'))
+    },
+  })
+
+  register({
+    name: 'clear_agent_paint',
+    title: 'Clear ChatGPT paint',
+    description: 'Remove all paint added by ChatGPT while preserving every human fill and stroke.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    annotations: { destructiveHint: true },
+    execute: () => {
+      canvas.clearPaint('agent')
+      onAgentActivity?.('ChatGPT cleared its paint. Your paint stayed untouched.')
+      return success('Cleared ChatGPT paint and preserved the person’s work.', { world: canvas.readWorld() })
     },
   })
 

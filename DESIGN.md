@@ -2,31 +2,30 @@
 
 ## Theme
 
-A bright tabletop drawing session: warm paper, deep ink, cobalt controls, and coral agent marks. Dark mode keeps the same hierarchy without becoming a neon developer interface.
+A bright tabletop coloring session: warm paper, deep ink, cobalt human controls, and coral ChatGPT cues. The picture stays central; the interface frames the activity without becoming a dashboard.
 
-## Color
+## Color and type
 
-- Ink: deep blue-black for text and navigation
-- Paper: warm near-white for the canvas and reading surfaces
-- Cobalt: primary actions and human-origin markers
-- Coral: agent proposals, review states, and collaboration cues
+- Deep blue-black: outlines, text, and navigation
+- Warm near-white: paper and reading surfaces
+- Cobalt: primary actions and human-origin activity
+- Coral: ChatGPT paint outlines and collaboration cues
 - Muted blue-grey: supporting copy and inactive controls
-
-## Typography
-
-Outfit carries the friendly product voice. IBM Plex Mono is reserved for compact state and protocol details. Headings are direct and sentence case.
+- Outfit: friendly product voice
+- IBM Plex Mono: compact state and protocol details only
 
 ## Layout
 
-The canvas remains the dominant surface. A compact guide sits over it and advances with the collaboration state. Technical controls stay behind an Advanced disclosure. Mobile preserves the same order with full-width guidance and large actions.
+The outlined scene always owns most of the viewport. The first-run guide contains one action. After that action it dismisses itself, revealing the full page and leaving only a small pair cue and activity strip. Technical details live behind **Advanced**.
 
-## Components
+## Collaboration signals
 
-- Turn guide: one current instruction, role label, and one primary action
-- Proposal review: title, plain-language explanation, visible pending state, accept or discard
-- Advanced details: WebMCP status, revision, available tools, and provenance legend
-- Performance strip: current beat and stop action
+- The activity strip names the latest actor and move.
+- Human fills keep the standard dark outline.
+- ChatGPT fills gain a coral outline; agent strokes are dashed.
+- The Advanced panel explains the exact WebMCP path and shows a text legend.
+- Undo and clear controls state whose work they affect.
 
 ## Motion
 
-Use short ease-out transitions only to explain state changes. Respect reduced motion.
+Use brief ease-out movement only for state changes: a new fill pulses once, cards enter softly, and demo partner moves arrive one at a time. Respect reduced motion.

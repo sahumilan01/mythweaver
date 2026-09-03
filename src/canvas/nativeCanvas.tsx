@@ -1,0 +1,360 @@
+import { ArrowCounterClockwise, Eraser, PencilSimple } from '@phosphor-icons/react'
+import {
+  useCallback,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
+import type { StoryBeat, StoryElement, StoryProposal } from '../story/storyStore'
+import type { CanvasPort, ProposalDraft, ProposalShape } from '../webmcp/registerTools'
+
+const CANVAS_STORAGE_KEY = 'mythweaver-pair-painting-v1'
+const VIEWBOX_WIDTH = 1200
+const VIEWBOX_HEIGHT = 700
+
+export type PaintOrigin = 'human' | 'agent'
+export type PaintPoint = { x: number; y: number }
+
+export const PAINT_REGIONS = [
+  { id: 'hill', label: 'Moonlit hill', d: 'M0 515 C180 430 345 485 515 470 C720 450 890 390 1200 470 L1200 700 L0 700 Z' },
+  { id: 'river', label: 'Winding river', d: 'M535 700 C595 610 700 570 815 550 C905 535 975 515 1030 465 C1000 535 935 575 850 602 C750 635 690 665 655 700 Z' },
+  { id: 'moon', label: 'Moon', d: 'M260 82 A78 78 0 1 0 260 238 A78 78 0 1 0 260 82 Z' },
+  { id: 'star-one', label: 'Little star', d: 'M104 126 L116 151 L144 155 L124 174 L129 202 L104 189 L79 202 L84 174 L64 155 L92 151 Z' },
+  { id: 'star-two', label: 'Far star', d: 'M438 84 L447 103 L468 106 L453 121 L456 142 L438 132 L419 142 L423 121 L408 106 L429 103 Z' },
+  { id: 'fox-tail', label: 'Fox tail', d: 'M714 430 C835 350 915 385 904 464 C895 530 820 542 744 492 C807 487 832 456 842 424 C805 432 770 454 733 476 Z' },
+  { id: 'fox-body', label: 'Fox body', d: 'M545 340 C505 405 514 515 583 548 C647 576 735 548 754 482 C770 424 736 365 678 342 C634 325 581 325 545 340 Z' },
+  { id: 'fox-head', label: 'Fox face', d: 'M548 348 L520 260 L590 298 C625 278 669 278 705 299 L776 260 L747 351 C735 402 694 432 647 432 C598 432 560 402 548 348 Z' },
+] as const
+
+type RegionId = (typeof PAINT_REGIONS)[number]['id']
+type RegionFill = { color: string; origin: PaintOrigin }
+
+type CanvasShape =
+  | { id: string; type: 'stroke'; origin: PaintOrigin; color: string; width: number; points: PaintPoint[] }
+  | {
+      id: string
+      type: 'geo'
+      origin: PaintOrigin
+      status: 'pending' | 'committed'
+      elementId?: string
+      proposalId?: string
+      geo: ProposalShape
+      x: number
+      y: number
+      w: number
+      h: number
+      label: string
+      color: string
+    }
+
+export interface CanvasSnapshot {
+  shapes: CanvasShape[]
+  fills: Partial<Record<RegionId, RegionFill>>
+  focusedIds: string[]
+  lastAction: { origin: PaintOrigin; label: string } | null
+}
+
+export interface NativeCanvasPort extends CanvasPort {
+  addHumanStarter(): void
+  addPaintStroke(points: PaintPoint[], color: string, width: number, origin: PaintOrigin): string
+  paintRegion(regionId: string, color: string, origin: PaintOrigin): void
+  clearPaint(origin: PaintOrigin): void
+  undoLast(origin: PaintOrigin): boolean
+  commitProposal(proposal: StoryProposal): void
+  subscribeToHumanChanges(listener: () => void): () => void
+  subscribe(listener: () => void): () => void
+  getSnapshot(): CanvasSnapshot
+  getServerSnapshot(): CanvasSnapshot
+  setPreviewHandler(handler: (beats: StoryBeat[]) => void): void
+}
+
+const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null }
+
+const loadSnapshot = (): CanvasSnapshot => {
+  if (typeof window === 'undefined') return EMPTY_SNAPSHOT
+  try {
+    const value = JSON.parse(window.localStorage.getItem(CANVAS_STORAGE_KEY) ?? '{}')
+    return {
+      shapes: Array.isArray(value.shapes) ? value.shapes : [],
+      fills: value.fills && typeof value.fills === 'object' ? value.fills : {},
+      focusedIds: [],
+      lastAction: value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent'
+        ? value.lastAction
+        : null,
+    }
+  } catch {
+    return EMPTY_SNAPSHOT
+  }
+}
+
+const safeColor = (color: string) => /^#[0-9a-f]{6}$/i.test(color) ? color : '#d9513f'
+
+export function createNativeCanvasPort(): NativeCanvasPort {
+  let snapshot: CanvasSnapshot = loadSnapshot()
+  let previewHandler: (beats: StoryBeat[]) => void = () => undefined
+  const listeners = new Set<() => void>()
+  const humanListeners = new Set<() => void>()
+  const actions: Array<{ origin: PaintOrigin; undo: () => void }> = []
+
+  const publish = (next: CanvasSnapshot) => {
+    snapshot = next
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(CANVAS_STORAGE_KEY, JSON.stringify({ shapes: next.shapes, fills: next.fills, lastAction: next.lastAction }))
+    }
+    listeners.forEach((listener) => listener())
+  }
+
+  const announceHumanChange = () => humanListeners.forEach((listener) => listener())
+  const flash = (id: string) => globalThis.setTimeout(() => {
+    if (snapshot.focusedIds.includes(id)) publish({ ...snapshot, focusedIds: [] })
+  }, 850)
+
+  const paintRegion = (regionId: string, color: string, origin: PaintOrigin) => {
+    const region = PAINT_REGIONS.find((item) => item.id === regionId)
+    if (!region) throw new Error(`Unknown paint region: ${regionId}.`)
+    const previous = snapshot.fills[region.id]
+    actions.push({
+      origin,
+      undo: () => {
+        const fills = { ...snapshot.fills }
+        if (previous) fills[region.id] = previous
+        else delete fills[region.id]
+        publish({ ...snapshot, fills, focusedIds: [region.id], lastAction: { origin, label: `Undid color on ${region.label}` } })
+      },
+    })
+    publish({
+      ...snapshot,
+      fills: { ...snapshot.fills, [region.id]: { color: safeColor(color), origin } },
+      focusedIds: [region.id],
+      lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} colored ${region.label}` },
+    })
+    if (origin === 'human') announceHumanChange()
+    flash(region.id)
+  }
+
+  const addPaintStroke = (points: PaintPoint[], color: string, width: number, origin: PaintOrigin) => {
+    if (points.length < 2 || points.length > 160) throw new Error('A stroke needs between 2 and 160 points.')
+    const id = `${origin}-stroke-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    actions.push({
+      origin,
+      undo: () => publish({
+        ...snapshot,
+        shapes: snapshot.shapes.filter((shape) => shape.id !== id),
+        lastAction: { origin, label: `Undid ${origin === 'agent' ? 'ChatGPT’s' : 'your'} last stroke` },
+      }),
+    })
+    publish({
+      ...snapshot,
+      shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points }],
+      lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} added a brush stroke` },
+    })
+    if (origin === 'human') announceHumanChange()
+    return id
+  }
+
+  const renderElements = (proposal: ProposalDraft): StoryElement[] => {
+    const elements = proposal.elements.map((element) => ({ id: element.id, shapeId: `shape:${proposal.id}:${element.id}`, name: element.name, role: element.role }))
+    const additions: CanvasShape[] = proposal.elements.map((element) => ({
+      id: `shape:${proposal.id}:${element.id}`,
+      type: 'geo',
+      origin: 'agent',
+      status: 'pending',
+      elementId: element.id,
+      proposalId: proposal.id,
+      geo: element.shape,
+      x: element.x,
+      y: element.y,
+      w: element.w,
+      h: element.h,
+      label: element.name,
+      color: '#e7651b',
+    }))
+    publish({ ...snapshot, shapes: [...snapshot.shapes, ...additions], lastAction: { origin: 'agent', label: 'ChatGPT staged a story idea' } })
+    return elements
+  }
+
+  return {
+    addHumanStarter: () => paintRegion('moon', '#f0b343', 'human'),
+    addPaintStroke,
+    paintRegion,
+    clearPaint(origin) {
+      const removedShapes = snapshot.shapes.filter((shape) => shape.origin === origin)
+      const removedFills = Object.entries(snapshot.fills).filter(([, fill]) => fill?.origin === origin)
+      if (removedShapes.length === 0 && removedFills.length === 0) return
+      actions.push({
+        origin,
+        undo: () => publish({
+          ...snapshot,
+          shapes: [...snapshot.shapes, ...removedShapes],
+          fills: { ...snapshot.fills, ...Object.fromEntries(removedFills) },
+          lastAction: { origin, label: `Restored ${origin === 'agent' ? 'ChatGPT’s' : 'your'} paint` },
+        }),
+      })
+      const fills = { ...snapshot.fills }
+      removedFills.forEach(([id]) => delete fills[id as RegionId])
+      publish({ ...snapshot, shapes: snapshot.shapes.filter((shape) => shape.origin !== origin), fills, lastAction: { origin, label: `Cleared ${origin === 'agent' ? 'ChatGPT’s' : 'your'} paint` } })
+      if (origin === 'human') announceHumanChange()
+    },
+    undoLast(origin) {
+      const index = actions.findLastIndex((action) => action.origin === origin)
+      if (index < 0) return false
+      const [action] = actions.splice(index, 1)
+      action.undo()
+      if (origin === 'human') announceHumanChange()
+      return true
+    },
+    readWorld() {
+      return {
+        selection: snapshot.focusedIds,
+        regions: PAINT_REGIONS.map((region) => ({ id: region.id, name: region.label, fill: snapshot.fills[region.id] ?? null })),
+        shapes: snapshot.shapes.slice(0, 40).map((shape) => shape.type === 'stroke'
+          ? { id: shape.id, type: 'brush_stroke', origin: shape.origin, color: shape.color, width: shape.width, points: shape.points }
+          : { id: shape.id, type: shape.geo, origin: shape.origin, status: shape.status, text: shape.label, elementId: shape.elementId }),
+      }
+    },
+    renderProposal: renderElements,
+    replaceProposal(previous, proposal) {
+      const ids = new Set(previous.elements.map((element) => element.shapeId))
+      publish({ ...snapshot, shapes: snapshot.shapes.filter((shape) => !ids.has(shape.id)) })
+      return renderElements(proposal)
+    },
+    clearProposal(proposal) {
+      const ids = new Set(proposal.elements.map((element) => element.shapeId))
+      publish({ ...snapshot, shapes: snapshot.shapes.filter((shape) => !ids.has(shape.id)) })
+    },
+    commitProposal(proposal) {
+      const ids = new Set(proposal.elements.map((element) => element.shapeId))
+      publish({ ...snapshot, shapes: snapshot.shapes.map((shape) => shape.type === 'geo' && ids.has(shape.id) ? { ...shape, status: 'committed' as const } : shape) })
+    },
+    focus(elementIds) {
+      const ids = snapshot.shapes.filter((shape) => shape.type === 'geo' && shape.elementId && elementIds.includes(shape.elementId)).map((shape) => shape.id)
+      publish({ ...snapshot, focusedIds: ids })
+      ids.forEach(flash)
+      return elementIds.filter((elementId) => snapshot.shapes.some((shape) => shape.type === 'geo' && shape.elementId === elementId))
+    },
+    preview: (beats) => previewHandler(beats),
+    subscribeToHumanChanges(listener) {
+      humanListeners.add(listener)
+      return () => humanListeners.delete(listener)
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    getSnapshot: () => snapshot,
+    getServerSnapshot: () => EMPTY_SNAPSHOT,
+    setPreviewHandler(handler) {
+      previewHandler = handler
+    },
+  }
+}
+
+const pointsString = (points: PaintPoint[]) => points.map((point) => `${point.x},${point.y}`).join(' ')
+
+function Star({ shape }: { shape: Extract<CanvasShape, { type: 'geo' }> }) {
+  const cx = shape.x + shape.w / 2
+  const cy = shape.y + shape.h / 2
+  const outer = Math.min(shape.w, shape.h) / 2
+  const inner = outer * 0.46
+  const points = Array.from({ length: 10 }, (_, index) => {
+    const radius = index % 2 === 0 ? outer : inner
+    const angle = -Math.PI / 2 + (index * Math.PI) / 5
+    return `${cx + Math.cos(angle) * radius},${cy + Math.sin(angle) * radius}`
+  }).join(' ')
+  return <polygon points={points} />
+}
+
+function GeoShape({ shape, focused }: { shape: Extract<CanvasShape, { type: 'geo' }>; focused: boolean }) {
+  const common = {
+    fill: shape.origin === 'agent' ? 'rgba(231, 101, 27, 0.09)' : 'rgba(66, 99, 235, 0.08)',
+    stroke: shape.color,
+    strokeWidth: focused ? 7 : 4,
+    strokeDasharray: shape.status === 'pending' ? '12 10' : undefined,
+    vectorEffect: 'non-scaling-stroke' as const,
+  }
+  const geometry = shape.geo === 'ellipse'
+    ? <ellipse {...common} cx={shape.x + shape.w / 2} cy={shape.y + shape.h / 2} rx={shape.w / 2} ry={shape.h / 2} />
+    : shape.geo === 'star'
+      ? <g {...common}><Star shape={shape} /></g>
+      : shape.geo === 'diamond'
+        ? <polygon {...common} points={`${shape.x + shape.w / 2},${shape.y} ${shape.x + shape.w},${shape.y + shape.h / 2} ${shape.x + shape.w / 2},${shape.y + shape.h} ${shape.x},${shape.y + shape.h / 2}`} />
+        : <rect {...common} x={shape.x} y={shape.y} width={shape.w} height={shape.h} rx={shape.geo === 'cloud' ? 42 : 12} />
+  return <g className={focused ? 'native-shape is-focused' : 'native-shape'}>{geometry}<text x={shape.x + shape.w / 2} y={shape.y + shape.h / 2} textAnchor="middle" dominantBaseline="middle">{shape.label}</text></g>
+}
+
+export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
+  const snapshot = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
+  const [draft, setDraft] = useState<PaintPoint[]>([])
+  const [color, setColor] = useState('#263f98')
+  const svgRef = useRef<SVGSVGElement>(null)
+
+  const pointFromEvent = useCallback((event: ReactPointerEvent<SVGSVGElement>) => {
+    const svg = svgRef.current
+    if (!svg) return null
+    const point = svg.createSVGPoint()
+    point.x = event.clientX
+    point.y = event.clientY
+    const matrix = svg.getScreenCTM()
+    if (!matrix) return null
+    const transformed = point.matrixTransform(matrix.inverse())
+    return { x: transformed.x, y: transformed.y }
+  }, [])
+
+  const startStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.target !== event.currentTarget && (event.target as Element).closest('.paint-region')) return
+    const point = pointFromEvent(event)
+    if (!point) return
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setDraft([point, point])
+  }
+  const continueStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (draft.length === 0) return
+    const point = pointFromEvent(event)
+    if (point) setDraft((current) => current.length < 160 ? [...current, point] : current)
+  }
+  const finishStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (draft.length === 0) return
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+    canvas.addPaintStroke(draft, color, 6, 'human')
+    setDraft([])
+  }
+  const canUndo = snapshot.shapes.some((shape) => shape.origin === 'human') || Object.values(snapshot.fills).some((fill) => fill?.origin === 'human')
+
+  return (
+    <div className="native-canvas-shell">
+      <div className="live-paint-status" aria-live="polite"><i className={snapshot.lastAction?.origin === 'agent' ? 'is-agent' : ''} /><span>{snapshot.lastAction?.label ?? 'Outline ready. You can paint while ChatGPT joins in.'}</span></div>
+      <svg
+        ref={svgRef}
+        className="native-canvas"
+        viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
+        preserveAspectRatio="xMidYMid meet"
+        aria-label="Coloring book canvas. Tap a region to fill it, or drag to draw."
+        onPointerDown={startStroke}
+        onPointerMove={continueStroke}
+        onPointerUp={finishStroke}
+        onPointerCancel={() => setDraft([])}
+      >
+        <rect className="native-canvas-paper" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} />
+        {PAINT_REGIONS.map((region) => {
+          const fill = snapshot.fills[region.id]
+          return <g key={region.id} className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}><path d={region.d} fill={fill?.color ?? '#fbfaf4'} onPointerDown={(event) => { event.stopPropagation(); canvas.paintRegion(region.id, color, 'human') }} /><title>{region.label}{fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : 'you'}` : ', uncolored'}</title></g>
+        })}
+        <g className="fox-details" aria-hidden="true"><circle cx="615" cy="348" r="6" /><circle cx="682" cy="348" r="6" /><path d="M635 373 Q648 385 661 373" /></g>
+        {snapshot.shapes.map((shape) => shape.type === 'stroke'
+          ? <polyline key={shape.id} className={shape.origin === 'agent' ? 'agent-stroke' : 'human-stroke'} points={pointsString(shape.points)} fill="none" stroke={shape.color} strokeWidth={shape.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          : <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
+        {draft.length > 1 && <polyline points={pointsString(draft)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <div className="native-toolbar" aria-label="Painting tools">
+        <span><PencilSimple weight="bold" aria-hidden="true" /> Paint</span>
+        <div className="native-colors" aria-label="Paint color">
+          {['#263f98', '#18213f', '#d9513f', '#247c63', '#f0b343'].map((option) => <button key={option} type="button" className={color === option ? 'is-selected' : ''} style={{ '--swatch': option } as CSSProperties} onClick={() => setColor(option)} aria-label={`Use ${option} paint color`} />)}
+        </div>
+        <button type="button" onClick={() => canvas.undoLast('human')} disabled={!canUndo} aria-label="Undo my last paint"><ArrowCounterClockwise weight="bold" aria-hidden="true" /></button>
+        <button type="button" onClick={() => canvas.clearPaint('human')} disabled={!canUndo} aria-label="Clear my paint"><Eraser weight="bold" aria-hidden="true" /></button>
+      </div>
+    </div>
+  )
+}

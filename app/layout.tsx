@@ -4,7 +4,6 @@ import '@fontsource/outfit/500.css'
 import '@fontsource/outfit/600.css'
 import '@fontsource/outfit/700.css'
 import '@fontsource/ibm-plex-mono/500.css'
-import 'tldraw/tldraw.css'
 import '../src/styles.css'
 
 export const metadata: Metadata = {
