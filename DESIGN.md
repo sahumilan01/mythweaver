@@ -27,6 +27,9 @@ The outlined scene always owns most of the viewport. The first-run guide contain
 - ChatGPT fills gain a coral outline; agent strokes are dashed.
 - The Advanced panel explains the exact WebMCP path and shows a text legend.
 - Undo and clear controls state whose work they affect.
+- The header rule chip opens the human-owned session controller.
+- A compact canvas ribbon names the active painter and counts down moves before the brush passes.
+- The second agent uses emerald presence and paint outlines so simultaneous participants remain legible.
 
 ## Motion
 

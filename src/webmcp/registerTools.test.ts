@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createStoryStore } from '../story/storyStore'
+import { createTurnSessionStore, type TurnSessionStore } from '../session/turnSession'
 import {
   registerMythWeaverTools,
   type CanvasPort,
@@ -8,7 +9,7 @@ import {
   type RegisteredTool,
 } from './registerTools'
 
-function createHarness() {
+function createHarness(turnSession?: TurnSessionStore) {
   const tools = new Map<string, RegisteredTool>()
   const renderProposal = vi.fn((proposal: ProposalDraft) =>
     proposal.elements.map(({ shape: _shape, x: _x, y: _y, w: _w, h: _h, ...element }) => ({
@@ -53,6 +54,7 @@ function createHarness() {
     modelContext,
     story: createStoryStore(),
     canvas,
+    turnSession,
   })
 
   return { tools, renderProposal, paintRegion, addPaintStroke, undoLast, clearPaint, moveAgentToRegion }
@@ -97,6 +99,20 @@ describe('MythWeaver WebMCP tools', () => {
     expect(moveAgentToRegion).toHaveBeenCalledWith('moon', 'Painting moon')
     expect(paintRegion).toHaveBeenCalledWith('moon', '#f0b343', 'agent')
     expect(moveAgentToRegion.mock.invocationCallOrder[0]).toBeLessThan(paintRegion.mock.invocationCallOrder[0])
+  })
+
+  it('obeys the human-selected turn rule', async () => {
+    const session = createTurnSessionStore('one-one')
+    const { tools, paintRegion } = createHarness(session)
+
+    const early = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
+    expect(early.isError).toBe(true)
+    expect(paintRegion).not.toHaveBeenCalled()
+
+    session.noteMove('human')
+    const turn = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: '#f0b343' })
+    expect(turn.isError).not.toBe(true)
+    expect(session.getState().active).toBe('human')
   })
 
   it('rejects malformed paint colors before touching the canvas', async () => {

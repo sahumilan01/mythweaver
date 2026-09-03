@@ -14,7 +14,8 @@ const CANVAS_STORAGE_KEY = 'mythweaver-pair-painting-v1'
 const VIEWBOX_WIDTH = 1200
 const VIEWBOX_HEIGHT = 700
 
-export type PaintOrigin = 'human' | 'agent'
+export type PaintOrigin = 'human' | 'agent' | 'agent-two'
+export type AgentId = 'agent' | 'agent-two'
 export type PaintPoint = { x: number; y: number }
 export type AgentPresence = { x: number; y: number; label: string }
 
@@ -67,6 +68,7 @@ export interface CanvasSnapshot {
   focusedIds: string[]
   lastAction: { origin: PaintOrigin; label: string } | null
   agentPresence: AgentPresence | null
+  agentTwoPresence: AgentPresence | null
 }
 
 export interface NativeCanvasPort extends CanvasPort {
@@ -81,12 +83,12 @@ export interface NativeCanvasPort extends CanvasPort {
   getSnapshot(): CanvasSnapshot
   getServerSnapshot(): CanvasSnapshot
   setPreviewHandler(handler: (beats: StoryBeat[]) => void): void
-  showAgentPresence(label: string): void
-  moveAgentCursor(point: PaintPoint, label: string): Promise<void>
-  moveAgentToRegion(regionId: string, label: string): Promise<void>
+  showAgentPresence(label: string, agentId?: AgentId): void
+  moveAgentCursor(point: PaintPoint, label: string, agentId?: AgentId): Promise<void>
+  moveAgentToRegion(regionId: string, label: string, agentId?: AgentId): Promise<void>
 }
 
-const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null, agentPresence: null }
+const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null, agentPresence: null, agentTwoPresence: null }
 
 const loadSnapshot = (): CanvasSnapshot => {
   if (typeof window === 'undefined') return EMPTY_SNAPSHOT
@@ -100,6 +102,7 @@ const loadSnapshot = (): CanvasSnapshot => {
         ? value.lastAction
         : null,
       agentPresence: null,
+      agentTwoPresence: null,
     }
   } catch {
     return EMPTY_SNAPSHOT
@@ -107,6 +110,7 @@ const loadSnapshot = (): CanvasSnapshot => {
 }
 
 const safeColor = (color: string) => /^#[0-9a-f]{6}$/i.test(color) ? color : '#d9513f'
+const originName = (origin: PaintOrigin) => origin === 'human' ? 'You' : origin === 'agent-two' ? 'Mica' : 'ChatGPT'
 
 export function createNativeCanvasPort(): NativeCanvasPort {
   let snapshot: CanvasSnapshot = loadSnapshot()
@@ -145,10 +149,13 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       ...snapshot,
       fills: { ...snapshot.fills, [region.id]: { color: safeColor(color), origin } },
       focusedIds: [region.id],
-      lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} colored ${region.label}` },
+      lastAction: { origin, label: `${originName(origin)} colored ${region.label}` },
       agentPresence: origin === 'agent' && snapshot.agentPresence
         ? { ...snapshot.agentPresence, label: `Painted ${region.label}` }
         : snapshot.agentPresence,
+      agentTwoPresence: origin === 'agent-two' && snapshot.agentTwoPresence
+        ? { ...snapshot.agentTwoPresence, label: `Painted ${region.label}` }
+        : snapshot.agentTwoPresence,
     })
     if (origin === 'human') announceHumanChange()
     flash(region.id)
@@ -162,38 +169,44 @@ export function createNativeCanvasPort(): NativeCanvasPort {
       undo: () => publish({
         ...snapshot,
         shapes: snapshot.shapes.filter((shape) => shape.id !== id),
-        lastAction: { origin, label: `Undid ${origin === 'agent' ? 'ChatGPT’s' : 'your'} last stroke` },
+        lastAction: { origin, label: `Undid ${origin === 'human' ? 'your' : `${originName(origin)}'s`} last stroke` },
       }),
     })
     publish({
       ...snapshot,
       shapes: [...snapshot.shapes, { id, type: 'stroke', origin, color: safeColor(color), width: Math.min(18, Math.max(2, width)), points }],
-      lastAction: { origin, label: `${origin === 'agent' ? 'ChatGPT' : 'You'} added a brush stroke` },
+      lastAction: { origin, label: `${originName(origin)} added a brush stroke` },
       agentPresence: origin === 'agent' && snapshot.agentPresence
         ? { ...snapshot.agentPresence, label: 'Finished brush stroke' }
         : snapshot.agentPresence,
+      agentTwoPresence: origin === 'agent-two' && snapshot.agentTwoPresence
+        ? { ...snapshot.agentTwoPresence, label: 'Finished brush stroke' }
+        : snapshot.agentTwoPresence,
     })
     if (origin === 'human') announceHumanChange()
     return id
   }
 
-  const showAgentPresence = (label: string) => {
+  const showAgentPresence = (label: string, agentId: AgentId = 'agent') => {
+    const key = agentId === 'agent' ? 'agentPresence' : 'agentTwoPresence'
+    const current = snapshot[key]
     publish({
       ...snapshot,
-      agentPresence: snapshot.agentPresence
-        ? { ...snapshot.agentPresence, label }
-        : { x: 1080, y: 100, label },
+      [key]: current
+        ? { ...current, label }
+        : { x: agentId === 'agent' ? 1080 : 980, y: agentId === 'agent' ? 100 : 145, label },
     })
   }
 
-  const moveAgentCursor = async (point: PaintPoint, label: string) => {
-    if (!snapshot.agentPresence) {
-      showAgentPresence('ChatGPT joined')
+  const moveAgentCursor = async (point: PaintPoint, label: string, agentId: AgentId = 'agent') => {
+    const key = agentId === 'agent' ? 'agentPresence' : 'agentTwoPresence'
+    if (!snapshot[key]) {
+      showAgentPresence(`${agentId === 'agent' ? 'ChatGPT' : 'Mica'} joined`, agentId)
     }
     await new Promise((resolve) => globalThis.setTimeout(resolve, 90))
     publish({
       ...snapshot,
-      agentPresence: {
+      [key]: {
         x: Math.min(VIEWBOX_WIDTH - 80, Math.max(20, point.x)),
         y: Math.min(VIEWBOX_HEIGHT - 60, Math.max(20, point.y)),
         label,
@@ -299,10 +312,10 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     },
     showAgentPresence,
     moveAgentCursor,
-    moveAgentToRegion(regionId, label) {
+    moveAgentToRegion(regionId, label, agentId = 'agent') {
       const region = PAINT_REGIONS.find((item) => item.id === regionId)
       if (!region) return Promise.reject(new Error(`Unknown paint region: ${regionId}.`))
-      return moveAgentCursor(REGION_CENTERS[region.id], label)
+      return moveAgentCursor(REGION_CENTERS[region.id], label, agentId)
     },
   }
 }
@@ -340,7 +353,7 @@ function GeoShape({ shape, focused }: { shape: Extract<CanvasShape, { type: 'geo
   return <g className={focused ? 'native-shape is-focused' : 'native-shape'}>{geometry}<text x={shape.x + shape.w / 2} y={shape.y + shape.h / 2} textAnchor="middle" dominantBaseline="middle">{shape.label}</text></g>
 }
 
-export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
+export function NativeStoryCanvas({ canvas, humanCanPaint = true }: { canvas: NativeCanvasPort; humanCanPaint?: boolean }) {
   const snapshot = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
   const [draft, setDraft] = useState<PaintPoint[]>([])
   const [color, setColor] = useState('#263f98')
@@ -359,6 +372,7 @@ export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
   }, [])
 
   const startStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!humanCanPaint) return
     if (event.target !== event.currentTarget && (event.target as Element).closest('.paint-region')) return
     const point = pointFromEvent(event)
     if (!point) return
@@ -366,6 +380,7 @@ export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
     setDraft([point, point])
   }
   const continueStroke = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!humanCanPaint) return
     if (draft.length === 0) return
     const point = pointFromEvent(event)
     if (point) setDraft((current) => current.length < 160 ? [...current, point] : current)
@@ -379,7 +394,7 @@ export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
   const canUndo = snapshot.shapes.some((shape) => shape.origin === 'human') || Object.values(snapshot.fills).some((fill) => fill?.origin === 'human')
 
   return (
-    <div className="native-canvas-shell">
+    <div className={`native-canvas-shell ${humanCanPaint ? '' : 'is-agent-turn'}`}>
       <div className="live-paint-status" aria-live="polite"><i className={snapshot.lastAction?.origin === 'agent' ? 'is-agent' : ''} /><span>{snapshot.lastAction?.label ?? 'Outline ready. You can paint while ChatGPT joins in.'}</span></div>
       <svg
         ref={svgRef}
@@ -395,36 +410,37 @@ export function NativeStoryCanvas({ canvas }: { canvas: NativeCanvasPort }) {
         <rect className="native-canvas-paper" width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT} />
         {PAINT_REGIONS.map((region) => {
           const fill = snapshot.fills[region.id]
-          return <g key={region.id} className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}><path d={region.d} fill={fill?.color ?? '#fbfaf4'} onPointerDown={(event) => { event.stopPropagation(); canvas.paintRegion(region.id, color, 'human') }} /><title>{region.label}{fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : 'you'}` : ', uncolored'}</title></g>
+          return <g key={region.id} className={`paint-region ${fill?.origin === 'agent' ? 'painted-by-agent' : fill?.origin === 'agent-two' ? 'painted-by-agent-two' : 'painted-by-human'} ${snapshot.focusedIds.includes(region.id) ? 'is-focused' : ''}`}><path d={region.d} fill={fill?.color ?? '#fbfaf4'} onPointerDown={(event) => { event.stopPropagation(); if (humanCanPaint) canvas.paintRegion(region.id, color, 'human') }} /><title>{region.label}{fill ? `, colored by ${fill.origin === 'agent' ? 'ChatGPT' : fill.origin === 'agent-two' ? 'Mica' : 'you'}` : ', uncolored'}</title></g>
         })}
         <g className="fox-details" aria-hidden="true"><circle cx="615" cy="348" r="6" /><circle cx="682" cy="348" r="6" /><path d="M635 373 Q648 385 661 373" /></g>
         {snapshot.shapes.map((shape) => shape.type === 'stroke'
           ? <polyline key={shape.id} className={shape.origin === 'agent' ? 'agent-stroke' : 'human-stroke'} points={pointsString(shape.points)} fill="none" stroke={shape.color} strokeWidth={shape.width} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
           : <GeoShape key={shape.id} shape={shape} focused={snapshot.focusedIds.includes(shape.id)} />)}
         {draft.length > 1 && <polyline points={pointsString(draft)} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />}
-        {snapshot.agentPresence && (
+        {([['agent', snapshot.agentPresence], ['agent-two', snapshot.agentTwoPresence]] as const).map(([agentId, presence]) => presence && (
           <g
-            className="agent-live-cursor"
-            style={{ transform: `translate(${snapshot.agentPresence.x}px, ${snapshot.agentPresence.y}px)` }}
-            aria-label={`ChatGPT cursor: ${snapshot.agentPresence.label}`}
+            key={agentId}
+            className={`agent-live-cursor ${agentId === 'agent-two' ? 'agent-two-cursor' : ''}`}
+            style={{ transform: `translate(${presence.x}px, ${presence.y}px)` }}
+            aria-label={`${agentId === 'agent' ? 'ChatGPT' : 'Mica'} cursor: ${presence.label}`}
           >
             <g className="agent-cursor-visual">
               <path className="agent-cursor-arrow" d="M0 0 L5 31 L13 21 L22 34 L29 29 L19 17 L31 14 Z" />
               <g className="agent-cursor-label" transform="translate(22 28)">
-                <rect x="0" y="0" width={Math.min(230, Math.max(108, snapshot.agentPresence.label.length * 7.1 + 26))} height="34" rx="9" />
-                <text x="13" y="22">{snapshot.agentPresence.label}</text>
+                <rect x="0" y="0" width={Math.min(230, Math.max(108, presence.label.length * 7.1 + 26))} height="34" rx="9" />
+                <text x="13" y="22">{presence.label}</text>
               </g>
             </g>
           </g>
-        )}
+        ))}
       </svg>
       <div className="native-toolbar" aria-label="Painting tools">
         <span><PencilSimple weight="bold" aria-hidden="true" /> Paint</span>
         <div className="native-colors" aria-label="Paint color">
           {['#263f98', '#18213f', '#d9513f', '#247c63', '#f0b343'].map((option) => <button key={option} type="button" className={color === option ? 'is-selected' : ''} style={{ '--swatch': option } as CSSProperties} onClick={() => setColor(option)} aria-label={`Use ${option} paint color`} />)}
         </div>
-        <button type="button" onClick={() => canvas.undoLast('human')} disabled={!canUndo} aria-label="Undo my last paint"><ArrowCounterClockwise weight="bold" aria-hidden="true" /></button>
-        <button type="button" onClick={() => canvas.clearPaint('human')} disabled={!canUndo} aria-label="Clear my paint"><Eraser weight="bold" aria-hidden="true" /></button>
+        <button type="button" onClick={() => canvas.undoLast('human')} disabled={!canUndo || !humanCanPaint} aria-label="Undo my last paint"><ArrowCounterClockwise weight="bold" aria-hidden="true" /></button>
+        <button type="button" onClick={() => canvas.clearPaint('human')} disabled={!canUndo || !humanCanPaint} aria-label="Clear my paint"><Eraser weight="bold" aria-hidden="true" /></button>
       </div>
     </div>
   )

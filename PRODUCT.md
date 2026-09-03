@@ -22,6 +22,8 @@ Success means a new user paints within seconds, always knows who made the latest
 
 The risk of the action determines the interaction. Small paint moves are instant because they are visible and reversible. Structural story additions are proposals because they affect the meaning of the shared work. Human and agent undo are separate, so neither collaborator accidentally erases the other's work.
 
+The human is also the session host. They select the turn rhythm, and every agent receives the active participant and remaining move count through the shared WebMCP world state.
+
 ## Brand personality
 
 Playful, candid, and encouraging. It speaks like a calm creative partner, not a technical console or an autonomous bot.

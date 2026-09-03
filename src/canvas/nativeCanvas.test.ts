@@ -55,4 +55,18 @@ describe('native pair-paint canvas', () => {
       label: 'Painting Fox body',
     })
   })
+
+  it('gives the second agent an independent cursor and paint identity', async () => {
+    const canvas = createNativeCanvasPort()
+
+    const movement = canvas.moveAgentToRegion('river', 'Painting Winding river', 'agent-two')
+    await vi.runAllTimersAsync()
+    await movement
+    canvas.paintRegion('river', '#247c63', 'agent-two')
+
+    expect(canvas.getSnapshot().agentPresence).toBeNull()
+    expect(canvas.getSnapshot().agentTwoPresence?.label).toBe('Painted Winding river')
+    const regions = canvas.readWorld().regions as Array<{ id: string; fill: { origin: string } | null }>
+    expect(regions.find((region) => region.id === 'river')?.fill?.origin).toBe('agent-two')
+  })
 })

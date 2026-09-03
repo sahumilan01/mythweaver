@@ -1,18 +1,23 @@
 'use client'
 
 import {
+  ArrowsClockwise,
+  CaretDown,
   Check,
   Copy,
+  Eye,
   Info,
   MoonStars,
   PencilSimpleLine,
   Play,
   Robot,
   Sparkle,
+  UsersThree,
   X,
 } from '@phosphor-icons/react'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createNativeCanvasPort, NativeStoryCanvas, PAINT_REGIONS } from '../canvas/nativeCanvas'
+import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
 import {
   createStoryStore,
   type StoryBeat,
@@ -23,6 +28,13 @@ import {
 import { registerMythWeaverTools } from '../webmcp/registerTools'
 
 const STORY_STORAGE_KEY = 'mythweaver-story-state-v1'
+const SESSION_STORAGE_KEY = 'mythweaver-session-mode-v1'
+
+function loadSessionMode(): SessionMode {
+  if (typeof window === 'undefined') return 'one-one'
+  const saved = window.localStorage.getItem(SESSION_STORAGE_KEY)
+  return saved && saved in SESSION_MODES ? saved as SessionMode : 'one-one'
+}
 
 function loadStoryState(): StoryState | undefined {
   if (typeof window === 'undefined') return undefined
@@ -46,6 +58,15 @@ function loadStoryState(): StoryState | undefined {
 const SAMPLE_PROMPT =
   'Paint with me in MythWeaver. Read the coloring canvas, choose two uncolored regions, and color them one at a time while I keep painting. Tell me what you changed.'
 
+const AGENT_SKY_STROKES = [
+  [{ x: 840, y: 130 }, { x: 875, y: 104 }, { x: 910, y: 130 }],
+  [{ x: 935, y: 205 }, { x: 970, y: 177 }, { x: 1008, y: 205 }],
+  [{ x: 720, y: 155 }, { x: 750, y: 128 }, { x: 782, y: 155 }],
+  [{ x: 315, y: 275 }, { x: 350, y: 248 }, { x: 386, y: 275 }],
+  [{ x: 1020, y: 300 }, { x: 1050, y: 274 }, { x: 1082, y: 300 }],
+  [{ x: 480, y: 190 }, { x: 515, y: 164 }, { x: 550, y: 190 }],
+] as const
+
 function useStoryState(story: StoryStore) {
   return useSyncExternalStore(story.subscribe, story.getState, story.getState)
 }
@@ -53,11 +74,13 @@ function useStoryState(story: StoryStore) {
 export function App() {
   const [story] = useState(() => createStoryStore(loadStoryState()))
   const [canvas] = useState(() => createNativeCanvasPort())
+  const [turnSession] = useState(() => createTurnSessionStore())
   const [guideOpen, setGuideOpen] = useState(() => {
     const saved = canvas.getSnapshot()
     return Object.keys(saved.fills).length === 0 && saved.shapes.length === 0
   })
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [rulesOpen, setRulesOpen] = useState(false)
   const [copied, setCopied] = useState(false)
   const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
@@ -65,6 +88,8 @@ export function App() {
   )
   const state = useStoryState(story)
   const canvasState = useSyncExternalStore(canvas.subscribe, canvas.getSnapshot, canvas.getServerSnapshot)
+  const turnState = useSyncExternalStore(turnSession.subscribe, turnSession.getState, turnSession.getState)
+  const agentBusy = useRef(false)
   const webMcpReady = typeof document !== 'undefined' && Boolean(document.modelContext)
 
   useEffect(
@@ -74,6 +99,21 @@ export function App() {
     [story],
   )
 
+  useEffect(
+    () => {
+      const savedMode = loadSessionMode()
+      if (savedMode !== turnSession.getState().mode) turnSession.setMode(savedMode)
+    },
+    [turnSession],
+  )
+
+  useEffect(
+    () => turnSession.subscribe(() => {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, turnSession.getState().mode)
+    }),
+    [turnSession],
+  )
+
   const startPerformance = useCallback((beats: StoryBeat[]) => {
     if (beats.length > 0) setPlayback({ beats, index: 0 })
   }, [])
@@ -81,8 +121,11 @@ export function App() {
   useEffect(() => canvas.setPreviewHandler(startPerformance), [canvas, startPerformance])
 
   useEffect(() => {
-    return canvas.subscribeToHumanChanges(() => story.noteHumanChange())
-  }, [canvas, story])
+    return canvas.subscribeToHumanChanges(() => {
+      story.noteHumanChange()
+      turnSession.noteMove('human')
+    })
+  }, [canvas, story, turnSession])
 
   useEffect(() => {
     if (!document.modelContext) return
@@ -90,9 +133,46 @@ export function App() {
       modelContext: document.modelContext,
       story,
       canvas,
+      turnSession,
       onAgentActivity: setAgentActivity,
     })
-  }, [canvas, story])
+  }, [canvas, story, turnSession])
+
+  useEffect(() => {
+    const participant = turnState.active
+    if (participant === 'human' || turnState.finished || agentBusy.current) return
+    const autoplay = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo' || !webMcpReady
+    if (!autoplay) return
+    const region = PAINT_REGIONS.find((item) => !canvas.getSnapshot().fills[item.id])
+    const isAgentOnly = turnState.mode === 'agent-show' || turnState.mode === 'agent-duo'
+    if (!region && isAgentOnly && turnState.round > AGENT_SKY_STROKES.length) {
+      turnSession.finish()
+      setAgentActivity('The round is complete. Choose another rule whenever you want to play again.')
+      return
+    }
+
+    agentBusy.current = true
+    const agentName = participant === 'agent-two' ? 'Mica' : 'ChatGPT'
+    const paintColor = participant === 'agent-two' ? '#247c63' : '#d9513f'
+    const stroke = AGENT_SKY_STROKES[(turnState.round - 1) % AGENT_SKY_STROKES.length]
+    canvas.showAgentPresence(`${agentName} is ready`, participant)
+    setAgentActivity(region ? `${agentName} is moving to ${region.label}.` : `${agentName} is drawing in the open sky.`)
+    void (async () => {
+      if (region) await canvas.moveAgentToRegion(region.id, `Painting ${region.label}`, participant)
+      else await canvas.moveAgentCursor(stroke[0], 'Drawing in the open sky', participant)
+      const current = turnSession.getState()
+      if (current.mode !== turnState.mode || current.round !== turnState.round || current.active !== participant) {
+        agentBusy.current = false
+        canvas.showAgentPresence(`${agentName} paused`, participant)
+        return
+      }
+      if (region) canvas.paintRegion(region.id, paintColor, participant)
+      else canvas.addPaintStroke([...stroke], paintColor, 7, participant)
+      turnSession.noteMove(participant)
+      setAgentActivity(region ? `${agentName} colored ${region.label}.` : `${agentName} added a stroke to the sky.`)
+      agentBusy.current = false
+    })()
+  }, [canvas, canvasState.fills, turnSession, turnState, webMcpReady])
 
   useEffect(() => {
     if (!playback || !canvas) return
@@ -115,26 +195,7 @@ export function App() {
   const stageSample = () => {
     if (state.pending) return
     setGuideOpen(false)
-    canvas.showAgentPresence('ChatGPT joined')
-    const uncolored = PAINT_REGIONS.filter((region) => !canvas.getSnapshot().fills[region.id]).slice(0, 2)
-    setAgentActivity(uncolored.length > 0
-      ? `ChatGPT joined and is moving to ${uncolored[0].label}.`
-      : 'ChatGPT joined and is finding an open place to draw.')
-    void (async () => {
-      if (uncolored.length === 0) {
-        const points = [{ x: 910, y: 175 }, { x: 950, y: 145 }, { x: 990, y: 175 }]
-        await canvas.moveAgentCursor(points[0], 'Drawing in the open sky')
-        canvas.addPaintStroke(points, '#d9513f', 6, 'agent')
-        setAgentActivity('ChatGPT added a small coral mark in the open sky.')
-        return
-      }
-      const colors = ['#d9513f', '#247c63']
-      for (const [index, region] of uncolored.entries()) {
-        await canvas.moveAgentToRegion(region.id, `Painting ${region.label}`)
-        canvas.paintRegion(region.id, colors[index], 'agent')
-        setAgentActivity(`ChatGPT colored ${region.label}. ${index < uncolored.length - 1 ? 'It is choosing its next open region.' : 'Your turn, or keep painting alongside it.'}`)
-      }
-    })()
+    turnSession.setMode('agent-show')
   }
 
   const addStarter = () => {
@@ -167,11 +228,12 @@ export function App() {
   }
 
   const agentHasPaint = Object.values(canvasState.fills).some((fill) => fill?.origin === 'agent')
-    || canvasState.shapes.some((shape) => shape.origin === 'agent')
+    || Object.values(canvasState.fills).some((fill) => fill?.origin === 'agent-two')
+    || canvasState.shapes.some((shape) => shape.origin === 'agent' || shape.origin === 'agent-two')
   const hasPaint = Object.keys(canvasState.fills).length > 0 || canvasState.shapes.length > 0
   const phase = state.pending
     ? 'review'
-    : agentHasPaint || canvasState.agentPresence || state.contributions.length > 0
+    : agentHasPaint || canvasState.agentPresence || canvasState.agentTwoPresence || state.contributions.length > 0
       ? 'build'
       : hasPaint || state.revision > 0
         ? 'ask'
@@ -191,7 +253,7 @@ export function App() {
         </div>
 
         <div className="header-actions">
-          <div className="collaborator-presence" aria-label={canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
+          <div className="collaborator-presence" aria-label={canvasState.agentTwoPresence ? 'You, ChatGPT, and Mica are in the canvas' : canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
             <span className="collaborator-avatar human-avatar" title="You">You</span>
             {canvasState.agentPresence && (
               <span className="collaborator-avatar agent-avatar" title="ChatGPT is in the canvas">
@@ -199,11 +261,19 @@ export function App() {
                 <i>ChatGPT joined</i>
               </span>
             )}
+            {canvasState.agentTwoPresence && (
+              <span className="collaborator-avatar agent-avatar agent-two-avatar" title="Mica is in the canvas">
+                <Sparkle weight="fill" aria-hidden="true" />
+                <i>Mica joined</i>
+              </span>
+            )}
           </div>
-          <span className={`turn-status turn-${phase}`}>
-            {phase === 'review' || phase === 'build' ? <Robot weight="bold" aria-hidden="true" /> : <PencilSimpleLine weight="bold" aria-hidden="true" />}
-            {phase === 'review' ? 'Your decision' : phase === 'build' ? 'Painting together' : phase === 'ask' ? 'Invite ChatGPT' : 'Start painting'}
-          </span>
+          <button className="session-chip" type="button" onClick={() => { setRulesOpen(true); setGuideOpen(false) }} aria-label="Change painting rules">
+            <span>{SESSION_MODES[turnState.mode].shortLabel}</span>
+            <b>{turnState.finished ? 'Page complete' : participantTurnLabel(turnState.active)}</b>
+            {!turnState.finished && turnState.movesRemaining > 1 && <i>{turnState.movesRemaining} moves</i>}
+            <CaretDown weight="bold" aria-hidden="true" />
+          </button>
           <button
             className="text-button"
             type="button"
@@ -233,7 +303,12 @@ export function App() {
       </header>
 
       <section className="canvas-stage" aria-label="MythWeaver story canvas">
-        <NativeStoryCanvas canvas={canvas} />
+        <NativeStoryCanvas canvas={canvas} humanCanPaint={turnSession.canMove('human')} />
+
+        <div className={`turn-ribbon turn-ribbon-${turnState.active}`} aria-live="polite">
+          {turnState.active === 'human' ? <PencilSimpleLine weight="bold" /> : turnState.active === 'agent-two' ? <Sparkle weight="fill" /> : <Robot weight="fill" />}
+          <span><b>{turnState.finished ? 'Painting complete' : participantTurnLabel(turnState.active)}</b>{turnState.finished ? ' Pick a rule to start another round.' : `${turnState.movesRemaining} ${turnState.movesRemaining === 1 ? 'move' : 'moves'} before the brush passes.`}</span>
+        </div>
 
         {!guideOpen && phase === 'ask' && (
           <aside className="pair-hint" aria-live="polite">
@@ -270,6 +345,18 @@ export function App() {
           />
         )}
 
+        {rulesOpen && (
+          <SessionRulesPanel
+            current={turnState.mode}
+            onChoose={(mode) => {
+              turnSession.setMode(mode)
+              setRulesOpen(false)
+              setAgentActivity(`${SESSION_MODES[mode].label} started. ${participantTurnLabel(turnSession.getState().active)}.`)
+            }}
+            onClose={() => setRulesOpen(false)}
+          />
+        )}
+
         {playback && (
           <PerformanceOverlay
             beat={playback.beats[playback.index]}
@@ -280,6 +367,44 @@ export function App() {
         )}
       </section>
     </main>
+  )
+}
+
+const participantName = (participant: SessionParticipant) => participant === 'human' ? 'You' : participant === 'agent-two' ? 'Mica' : 'ChatGPT'
+const participantTurnLabel = (participant: SessionParticipant) => participant === 'human' ? 'Your turn' : `${participantName(participant)}'s turn`
+
+function SessionRulesPanel({
+  current,
+  onChoose,
+  onClose,
+}: {
+  current: SessionMode
+  onChoose: (mode: SessionMode) => void
+  onClose: () => void
+}) {
+  const icons = {
+    'one-one': <ArrowsClockwise weight="bold" />,
+    'two-two': <UsersThree weight="bold" />,
+    'agent-show': <Eye weight="bold" />,
+    'agent-duo': <Sparkle weight="fill" />,
+  }
+  return (
+    <aside className="session-rules" aria-label="Painting session rules">
+      <button className="close-button" type="button" onClick={onClose} aria-label="Close painting rules"><X weight="bold" /></button>
+      <span className="session-rules-kicker">You set the rules</span>
+      <h2>How should we pass the brush?</h2>
+      <p>Pick a rhythm. Everyone on the canvas follows it immediately.</p>
+      <div className="session-mode-list">
+        {(Object.keys(SESSION_MODES) as SessionMode[]).map((mode) => (
+          <button key={mode} type="button" className={mode === current ? 'is-current' : ''} onClick={() => onChoose(mode)}>
+            <i>{icons[mode]}</i>
+            <span><b>{SESSION_MODES[mode].label}</b><small>{SESSION_MODES[mode].description}</small></span>
+            <strong>{SESSION_MODES[mode].shortLabel}</strong>
+          </button>
+        ))}
+      </div>
+      <p className="session-owner-note">Only you choose the rule. Agents can read it and must wait for their turn.</p>
+    </aside>
   )
 }
 
@@ -396,7 +521,7 @@ function TurnGuide({
           <>
             <button className="prompt-button" type="button" onClick={onSample}>
               <Robot weight="fill" aria-hidden="true" />
-              ChatGPT paints next
+              Watch ChatGPT finish
             </button>
             <button className="sample-button" type="button" onClick={onClose}>Keep painting</button>
           </>
