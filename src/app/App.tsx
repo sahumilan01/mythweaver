@@ -3,6 +3,7 @@
 import {
   Check,
   Copy,
+  Info,
   MoonStars,
   PencilSimpleLine,
   Play,
@@ -44,7 +45,7 @@ function loadStoryState(): StoryState | undefined {
 }
 
 const SAMPLE_PROMPT =
-  'Read my MythWeaver story world. Explain what you think my marks mean, then propose one surprising character and up to three story beats. Keep your idea on the proposal layer so I can respond before accepting it.'
+  'Look at my drawing in MythWeaver. Tell me what you think it means, then add one surprising idea as a proposal. Do not accept it for me.'
 
 const sampleDraft = (revision: number) => ({
   id: `sample-${Date.now()}`,
@@ -100,8 +101,10 @@ export function App() {
   const [story] = useState(() => createStoryStore(loadStoryState()))
   const [editor, setEditor] = useState<Editor | null>(null)
   const [canvas, setCanvas] = useState<MythCanvasPort | null>(null)
-  const [welcomeOpen, setWelcomeOpen] = useState(true)
+  const [guideOpen, setGuideOpen] = useState(true)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
     null,
   )
@@ -135,6 +138,7 @@ export function App() {
       modelContext: document.modelContext,
       story,
       canvas,
+      onAgentActivity: setAgentActivity,
     })
   }, [canvas, story])
 
@@ -161,19 +165,29 @@ export function App() {
     const draft = sampleDraft(state.revision)
     const elements = canvas.renderProposal(draft)
     story.propose({ ...draft, elements })
-    setWelcomeOpen(false)
+    setAgentActivity('The built-in demo staged an example proposal. It is not part of your story yet.')
+  }
+
+  const addStarter = () => {
+    if (!canvas) return
+    canvas.addHumanStarter()
+    story.noteHumanChange()
+    setAgentActivity('Your moon is on the canvas. ChatGPT can read it when you ask.')
   }
 
   const accept = () => {
     if (!canvas || !state.pending) return
+    const title = state.pending.title
     canvas.commitProposal(state.pending)
     story.acceptPending()
+    setAgentActivity(`You kept “${title}”. It is now part of the story.`)
   }
 
   const discard = () => {
     if (!canvas || !state.pending) return
     canvas.clearProposal(state.pending)
     story.discardPending()
+    setAgentActivity('You removed the suggestion. Your own marks stayed untouched.')
   }
 
   const perform = () => startPerformance(committedBeats)
@@ -183,6 +197,14 @@ export function App() {
     setCopied(true)
     window.setTimeout(() => setCopied(false), 1600)
   }
+
+  const phase = state.pending
+    ? 'review'
+    : state.contributions.length > 0
+      ? 'build'
+      : state.revision > 0
+        ? 'ask'
+        : 'start'
 
   return (
     <main className="myth-app">
@@ -198,25 +220,34 @@ export function App() {
         </div>
 
         <div className="header-actions">
-          <span className={`mcp-status ${webMcpReady ? 'is-ready' : ''}`}>
-            <Robot weight="bold" aria-hidden="true" />
-            {webMcpReady ? `WebMCP ready, revision ${state.revision}` : 'Drawing mode'}
+          <span className={`turn-status turn-${phase}`}>
+            {phase === 'review' ? <Robot weight="bold" aria-hidden="true" /> : <PencilSimpleLine weight="bold" aria-hidden="true" />}
+            {phase === 'review' ? 'Your decision' : phase === 'ask' ? 'Ask ChatGPT' : 'Your turn'}
           </span>
           <button
             className="text-button"
             type="button"
-            onClick={() => setWelcomeOpen(true)}
+            onClick={() => setGuideOpen(true)}
           >
-            How it works
+            Guide
+          </button>
+          <button
+            className="text-button advanced-button"
+            type="button"
+            onClick={() => setAdvancedOpen(true)}
+          >
+            Advanced
+            <Info weight="bold" aria-hidden="true" />
           </button>
           <button
             className="primary-button"
             type="button"
+            aria-label="Perform story"
             onClick={perform}
             disabled={committedBeats.length === 0 || Boolean(playback)}
           >
             <Play weight="fill" aria-hidden="true" />
-            Perform story
+            <span>Perform story</span>
           </button>
         </div>
       </header>
@@ -228,24 +259,31 @@ export function App() {
           licenseKey={process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY}
         />
 
-        <div className="provenance-key" aria-label="Contribution colors">
-          <span><i className="human-swatch" /> Your marks</span>
-          <span><i className="agent-swatch" /> Agent contribution</span>
-          <span className="consent-note">Agent proposes. You decide.</span>
-        </div>
-
         {state.pending && (
           <ProposalCard proposal={state.pending} onAccept={accept} onDiscard={discard} />
         )}
 
-        {welcomeOpen && (
-          <WelcomePanel
+        {!state.pending && !playback && guideOpen && (
+          <TurnGuide
+            phase={phase}
             webMcpReady={webMcpReady}
             copied={copied}
-            onClose={() => setWelcomeOpen(false)}
             onCopy={copyPrompt}
             onSample={stageSample}
-            sampleDisabled={!canvas || Boolean(state.pending)}
+            onStarter={addStarter}
+            onPerform={perform}
+            onClose={() => setGuideOpen(false)}
+            ready={Boolean(canvas)}
+          />
+        )}
+
+        {advancedOpen && (
+          <AdvancedPanel
+            webMcpReady={webMcpReady}
+            revision={state.revision}
+            contributions={state.contributions.length}
+            agentActivity={agentActivity}
+            onClose={() => setAdvancedOpen(false)}
           />
         )}
 
@@ -276,14 +314,17 @@ function ProposalCard({
       <div className="proposal-heading">
         <span className="proposal-icon"><Sparkle weight="fill" /></span>
         <div>
-          <span className="proposal-label">Agent proposal</span>
+          <span className="proposal-label">ChatGPT suggests</span>
           <h2>{proposal.title}</h2>
         </div>
-        <span className="proposal-status">Not in story</span>
+        <span className="proposal-status">Waiting for you</span>
       </div>
       <p>{proposal.narration}</p>
+      <p className="proposal-explanation">
+        ChatGPT read your canvas and added the dashed coral shapes. This is only a suggestion.
+      </p>
       <p className="counter-offer-copy">
-        Draw a counter-offer, then ask the agent to read again and revise.
+        Want a change? Draw over it, then tell ChatGPT what to revise.
       </p>
       <div className="proposal-meta">
         {proposal.elements.length} new {proposal.elements.length === 1 ? 'element' : 'elements'}
@@ -293,66 +334,144 @@ function ProposalCard({
       <div className="proposal-actions">
         <button className="accept-button" type="button" onClick={onAccept}>
           <Check weight="bold" aria-hidden="true" />
-          Accept contribution
+          Keep this idea
         </button>
         <button className="discard-button" type="button" onClick={onDiscard}>
           <X weight="bold" aria-hidden="true" />
-          Discard
+          Remove it
         </button>
       </div>
     </aside>
   )
 }
 
-function WelcomePanel({
+type GuidePhase = 'start' | 'ask' | 'build' | 'review'
+
+function TurnGuide({
+  phase,
   webMcpReady,
   copied,
-  sampleDisabled,
   onClose,
   onCopy,
   onSample,
+  onStarter,
+  onPerform,
+  ready,
 }: {
+  phase: GuidePhase
   webMcpReady: boolean
   copied: boolean
-  sampleDisabled: boolean
   onClose: () => void
   onCopy: () => void
   onSample: () => void
+  onStarter: () => void
+  onPerform: () => void
+  ready: boolean
 }) {
+  const isStart = phase === 'start'
+  const isAsk = phase === 'ask'
+  const isBuild = phase === 'build'
+
   return (
-    <div className="welcome-backdrop" role="presentation">
-      <section className="welcome-panel" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-        <button className="close-button" type="button" onClick={onClose} aria-label="Close introduction">
-          <X weight="bold" />
-        </button>
-        <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
-        <p className="welcome-kicker">A shared canvas with boundaries</p>
-        <h1 id="welcome-title">Draw first. Let the story answer.</h1>
-        <p className="welcome-copy">
-          Make a rough mark. Your browser agent can interpret it and propose what happens next. Only you can make the idea part of the story.
-        </p>
-        <div className="consent-flow" aria-label="How collaboration works">
-          <span><PencilSimpleLine weight="bold" aria-hidden="true" />You draw</span>
-          <span><Robot weight="bold" aria-hidden="true" />Agent proposes</span>
-          <span><Check weight="bold" aria-hidden="true" />You decide</span>
-        </div>
-        <div className="welcome-paths">
+    <aside className={`turn-guide guide-${phase}`} aria-live="polite">
+      <button className="close-button" type="button" onClick={onClose} aria-label="Hide guide">
+        <X weight="bold" />
+      </button>
+      <div className="turn-guide-role">
+        <span>{isAsk ? 'ChatGPT’s turn' : 'Your turn'}</span>
+        <i>{isStart ? '1' : isAsk ? '2' : '3'}</i>
+      </div>
+      <h1>{isStart ? 'Put one thing on the canvas' : isAsk ? 'Ask ChatGPT to look' : 'Your story has started'}</h1>
+      <p>
+        {isStart
+          ? 'Draw anything, even a circle or a word. Need a nudge? Start with a moon.'
+          : isAsk
+            ? webMcpReady
+              ? 'In ChatGPT, send the line below. It will read the canvas through WebMCP, then place a suggestion here.'
+              : 'Open this site inside ChatGPT to let it read the canvas. You can also preview the turn with the built-in example.'
+            : 'Keep drawing and ask for another idea, or play the story you have made so far.'}
+      </p>
+      {isAsk && <blockquote>“Look at my drawing in MythWeaver. Tell me what you think it means, then add one surprising idea as a proposal. Do not accept it for me.”</blockquote>}
+      <div className="turn-guide-actions">
+        {isStart && (
+          <button className="prompt-button" type="button" onClick={onStarter} disabled={!ready}>
+            <MoonStars weight="fill" aria-hidden="true" />
+            Add a moon to start
+          </button>
+        )}
+        {isAsk && (
           <button className="prompt-button" type="button" onClick={onCopy}>
             <Copy weight="bold" aria-hidden="true" />
-            {copied ? 'Prompt copied' : 'Copy agent prompt'}
+            {copied ? 'Prompt copied' : 'Copy this prompt'}
           </button>
-          <button className="sample-button" type="button" onClick={onSample} disabled={sampleDisabled}>
+        )}
+        {isAsk && (
+          <button className="sample-button" type="button" onClick={onSample}>
             <Sparkle weight="fill" aria-hidden="true" />
-            Try a sample turn
+            Show an example
           </button>
-        </div>
-        <p className="support-note">
-          {webMcpReady
-            ? 'Five story tools are available to your browser agent.'
-            : 'Open this page in the ChatGPT browser or WebMCP-enabled Chrome to create with an agent.'}
-        </p>
-      </section>
-    </div>
+        )}
+        {isBuild && (
+          <>
+            <button className="prompt-button" type="button" onClick={onPerform}>
+              <Play weight="fill" aria-hidden="true" />
+              Play my story
+            </button>
+            <button className="sample-button" type="button" onClick={onCopy}>
+              <Copy weight="bold" aria-hidden="true" />
+              {copied ? 'Prompt copied' : 'Ask for another idea'}
+            </button>
+          </>
+        )}
+      </div>
+      <p className="turn-guide-foot">
+        {isStart ? 'You make the first mark.' : isAsk ? 'ChatGPT can suggest. It cannot accept for you.' : 'You can keep building one turn at a time.'}
+      </p>
+    </aside>
+  )
+}
+
+function AdvancedPanel({
+  webMcpReady,
+  revision,
+  contributions,
+  agentActivity,
+  onClose,
+}: {
+  webMcpReady: boolean
+  revision: number
+  contributions: number
+  agentActivity: string
+  onClose: () => void
+}) {
+  return (
+    <aside className="advanced-panel" aria-label="Advanced WebMCP details">
+      <button className="close-button" type="button" onClick={onClose} aria-label="Close advanced details">
+        <X weight="bold" />
+      </button>
+      <span className="advanced-kicker"><Info weight="fill" />Advanced view</span>
+      <h2>How ChatGPT reaches the canvas</h2>
+      <p>WebMCP is the bridge. This page offers a small set of tools that ChatGPT can call while you stay in control.</p>
+      <ol className="mcp-flow">
+        <li><strong>The page offers five tools.</strong><span>Read, propose, revise, focus, and preview.</span></li>
+        <li><strong>ChatGPT reads structured canvas data.</strong><span>It does not guess from screen coordinates.</span></li>
+        <li><strong>Agent changes arrive as suggestions.</strong><span>Dashed coral shapes stay separate until you decide.</span></li>
+        <li><strong>Accept and remove belong to you.</strong><span>Those actions are not exposed as WebMCP tools.</span></li>
+      </ol>
+      <div className="advanced-stats">
+        <span><b>{webMcpReady ? 'Connected' : 'Canvas only'}</b>WebMCP</span>
+        <span><b>{revision}</b>Canvas revision</span>
+        <span><b>{contributions}</b>Ideas kept</span>
+      </div>
+      <div className="activity-log">
+        <span>Latest activity</span>
+        <p>{agentActivity}</p>
+      </div>
+      <div className="provenance-key" aria-label="Contribution appearance">
+        <span><i className="human-swatch" /> Your canvas marks</span>
+        <span><i className="agent-swatch" /> ChatGPT suggestion</span>
+      </div>
+    </aside>
   )
 }
 

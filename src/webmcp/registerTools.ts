@@ -71,6 +71,7 @@ interface RegisterToolsOptions {
   modelContext: ModelContextPort
   story: StoryStore
   canvas: CanvasPort
+  onAgentActivity?: (message: string) => void
 }
 
 const roles = new Set<StoryRole>(['character', 'place', 'object', 'event'])
@@ -231,6 +232,7 @@ export function registerMythWeaverTools({
   modelContext,
   story,
   canvas,
+  onAgentActivity,
 }: RegisterToolsOptions): () => void {
   const controller = new AbortController()
   const register = (tool: RegisteredTool) => {
@@ -247,6 +249,7 @@ export function registerMythWeaverTools({
     execute: () => {
       const state = story.getState()
       const world = canvas.readWorld()
+      onAgentActivity?.(`ChatGPT read ${world.shapes.length} canvas ${world.shapes.length === 1 ? 'shape' : 'shapes'} at revision ${state.revision}.`)
       return success(
         `Story world revision ${state.revision}. ${world.shapes.length} visible shapes and ${state.pending ? 'one proposal awaiting review' : 'no pending proposal'}.`,
         {
@@ -279,6 +282,7 @@ export function registerMythWeaverTools({
         }
         const rendered = canvas.renderProposal(draft)
         story.propose({ ...draft, elements: rendered })
+        onAgentActivity?.(`ChatGPT staged “${draft.title}” for your review. Nothing has been accepted yet.`)
         return success(
           `Proposed "${draft.title}" with ${rendered.length} elements. Ask the person to review it on the canvas.`,
           { proposalId: draft.id, revision: story.getState().revision, elementIds: rendered.map((e) => e.id) },
@@ -307,6 +311,7 @@ export function registerMythWeaverTools({
         }
         const rendered = canvas.replaceProposal(pending, draft)
         story.revise({ ...draft, elements: rendered })
+        onAgentActivity?.(`ChatGPT revised the pending idea to “${draft.title}”. It still needs your decision.`)
         return success(
           `Revised "${draft.title}". It is still waiting for human review.`,
           { proposalId: pending.id, revision: story.getState().revision },
@@ -336,6 +341,7 @@ export function registerMythWeaverTools({
           ? root.elementIds.map((id) => string(id, 'elementIds', 48))
           : []
         const focused = canvas.focus(ids)
+        onAgentActivity?.(`ChatGPT focused ${focused.length} story ${focused.length === 1 ? 'element' : 'elements'} without changing the canvas.`)
         return success(`Focused ${focused.length} story elements.`, { focused })
       } catch (error) {
         return failure(error)
@@ -353,6 +359,7 @@ export function registerMythWeaverTools({
       const beats = story.getState().contributions.flatMap((item) => item.beats)
       if (beats.length === 0) return failure(new Error('Accept a proposal with story beats before previewing.'))
       canvas.preview(beats)
+      onAgentActivity?.(`ChatGPT previewed ${beats.length} committed story ${beats.length === 1 ? 'beat' : 'beats'}.`)
       return success(`Playing ${beats.length} story beats.`, { beatCount: beats.length })
     },
   })

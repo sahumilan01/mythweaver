@@ -14,6 +14,7 @@ import type {
 import type { CanvasPort, ProposalDraft } from '../webmcp/registerTools'
 
 export interface MythCanvasPort extends CanvasPort {
+  addHumanStarter(): void
   commitProposal(proposal: StoryProposal): void
   subscribeToHumanChanges(listener: () => void): () => void
 }
@@ -103,6 +104,36 @@ export function createTldrawCanvasPort(
   }
 
   return {
+    addHumanStarter() {
+      runAgentMutation(() => {
+        const viewport = editor.getViewportPageBounds()
+        const shapeId = createShapeId()
+        editor.createShape<TLGeoShape>({
+          id: shapeId,
+          type: 'geo',
+          x: viewport.x + viewport.w / 2 - 90,
+          y: viewport.y + viewport.h / 2 - 90,
+          meta: { mythweaver: { origin: 'human', status: 'committed' } },
+          props: {
+            geo: 'ellipse',
+            w: 180,
+            h: 180,
+            color: 'blue',
+            labelColor: 'black',
+            fill: 'semi',
+            dash: 'draw',
+            size: 'm',
+            font: 'draw',
+            align: 'middle',
+            verticalAlign: 'middle',
+            richText: toRichText('Moon?'),
+          },
+        })
+        editor.select(shapeId)
+        editor.zoomToSelection({ animation: { duration: 360 } })
+        window.setTimeout(() => editor.selectNone(), 400)
+      })
+    },
     readWorld() {
       const selection = editor.getSelectedShapeIds().map(String)
       const shapes = editor.getCurrentPageShapes().slice(0, 24).map((shape) => {
