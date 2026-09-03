@@ -510,6 +510,55 @@ button:disabled {
   font-size: 11px;
 }
 
+.mcp-live-receipt {
+  position: absolute;
+  left: 16px;
+  top: 60px;
+  z-index: 18;
+  width: min(420px, calc(100vw - 32px));
+  padding: 11px 13px;
+  color: #f7f8ff;
+  border: 1px solid rgba(81, 185, 150, 0.45);
+  border-radius: 11px;
+  background: rgba(24, 33, 63, 0.94);
+  box-shadow: 0 12px 28px rgba(31, 53, 122, 0.2);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+  animation: card-in 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.mcp-live-receipt > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #82d8bb;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mcp-live-receipt > span i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #51b996;
+  box-shadow: 0 0 0 4px rgba(81, 185, 150, 0.14);
+  animation: webmcp-pulse 1600ms ease-in-out infinite;
+}
+
+.mcp-live-receipt p {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+@keyframes webmcp-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
 .pair-hint > svg {
   flex: 0 0 auto;
   color: #ef715e;
@@ -1513,10 +1562,12 @@ button:disabled {
     padding: 20px;
   }
 
-  .pair-hint {
+  .pair-hint,
+  .mcp-live-receipt {
     left: 10px;
     right: 10px;
     top: 104px;
+    width: auto;
     max-width: none;
   }
 

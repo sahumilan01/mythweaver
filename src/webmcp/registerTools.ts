@@ -323,19 +323,26 @@ export function registerMythWeaverTools({
       type: 'object',
       additionalProperties: false,
       properties: {
+        participant: {
+          type: 'string',
+          enum: ['agent', 'agent-two'],
+          description: 'Use agent for ChatGPT. Use agent-two only when a second invited agent is joining as Mica.',
+        },
         takeFirstTurn: {
           type: 'boolean',
-          description: 'Set true only when the person explicitly asks ChatGPT to make the first move.',
+          description: 'Set true only when the person explicitly asks this agent to make the first move.',
         },
       },
     },
     execute: (input) => {
       try {
         const root = object(input)
-        if (root.takeFirstTurn === true) turnSession?.startWith('agent')
-        canvas.showAgentPresence('ChatGPT joined through WebMCP', 'agent')
-        onAgentJoined?.('agent')
-        onAgentActivity?.('ChatGPT joined through WebMCP and is reading the live canvas before choosing.')
+        const participant = root.participant === 'agent-two' ? 'agent-two' : 'agent'
+        const name = participantName(participant)
+        if (root.takeFirstTurn === true) turnSession?.startWith(participant)
+        canvas.showAgentPresence(`${name} joined through WebMCP`, participant)
+        onAgentJoined?.(participant)
+        onAgentActivity?.(`${name} joined through WebMCP and is reading the live canvas before choosing.`)
         const briefing = sessionBriefing()
         return success(
           `Joined the shared canvas through WebMCP. ${briefing.recommendedNextAction}`,
@@ -380,6 +387,7 @@ export function registerMythWeaverTools({
         regionId: { type: 'string', enum: PAINT_ARTIFACTS.map((artifact) => artifact.id), description: 'One predefined section ID returned by get_story_world.' },
         color: { type: 'string', description: 'Six-digit hex color such as #d9513f.' },
         reason: { type: 'string', description: 'A short, user-facing visual reason for choosing this section and color.' },
+        repaintOwnFill: { type: 'boolean', description: 'Set true only when the person explicitly asks you to recolor a section previously painted by an agent. Human paint is never overwritten.' },
       },
       required: ['regionId', 'color', 'reason'],
     },
@@ -389,6 +397,14 @@ export function registerMythWeaverTools({
         const regionId = string(root.regionId, 'regionId', 48)
         const paintColor = color(root.color)
         const reason = string(root.reason, 'reason', 180)
+        const artifact = (canvas.readWorld().artifacts as unknown[] | undefined)?.map(object).find((item) => item.id === regionId)
+        const existingFill = artifact?.fill ? object(artifact.fill) : null
+        if (existingFill?.origin === 'human') {
+          throw new Error(`${regionId} belongs to the person. Preserve their paint and choose an open region instead.`)
+        }
+        if (existingFill && root.repaintOwnFill !== true) {
+          throw new Error(`${regionId} is already painted. Choose an open region, or set repaintOwnFill true only when the person asked for a recolor.`)
+        }
         const active = turnSession?.getState().active ?? 'agent'
         const participant = active === 'agent-two' ? 'agent-two' : 'agent'
         if (turnSession && !turnSession.canMove(participant)) {

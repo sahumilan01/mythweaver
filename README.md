@@ -11,6 +11,8 @@ MythWeaver is a live pair-painting canvas for a person and ChatGPT. It begins li
 - The human host chooses the rhythm: one-and-one, two-and-two, agent showcase, or a two-agent paint-off.
 - A live turn ribbon locks the brush between turns and counts down the remaining moves.
 - Human undo affects human paint. Agent undo and clear affect agent paint only.
+- ChatGPT cannot overwrite a person's painted section; recoloring its own work requires an explicit request.
+- A live WebMCP receipt shows the agent's latest read or visual decision without opening a technical panel.
 - Low-risk, reversible paint moves happen live. Larger story additions remain proposals that only the person can keep or remove.
 - The native SVG canvas has no production license dependency and persists locally across reloads.
 

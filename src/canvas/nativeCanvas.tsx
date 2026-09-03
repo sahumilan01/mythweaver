@@ -329,7 +329,7 @@ export function NativeStoryCanvas({ canvas, humanCanPaint = true }: { canvas: Na
 
   return (
     <div className={`native-canvas-shell ${humanCanPaint ? '' : 'is-agent-turn'}`}>
-      <div className="live-paint-status" aria-live="polite"><i className={snapshot.lastAction?.origin === 'agent' ? 'is-agent' : ''} /><span>{snapshot.lastAction?.label ?? 'Outline ready. You can paint while ChatGPT joins in.'}</span></div>
+      <div className="live-paint-status" aria-live="polite"><i className={snapshot.lastAction?.origin === 'agent' ? 'is-agent' : ''} /><span>{snapshot.lastAction?.label ?? 'Outline ready. Choose a color and tap one section.'}</span></div>
       <svg
         className="native-canvas"
         viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}

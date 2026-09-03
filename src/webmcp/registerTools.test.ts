@@ -61,7 +61,7 @@ function createHarness(turnSession?: TurnSessionStore) {
     onAgentJoined,
   })
 
-  return { tools, renderProposal, paintRegion, undoLast, clearPaint, moveAgentToRegion, showAgentPresence, onAgentJoined }
+  return { tools, canvas, renderProposal, paintRegion, undoLast, clearPaint, moveAgentToRegion, showAgentPresence, onAgentJoined }
 }
 
 describe('MythWeaver WebMCP tools', () => {
@@ -98,6 +98,16 @@ describe('MythWeaver WebMCP tools', () => {
       openRegions: expect.any(Array),
       collaborationProtocol: expect.any(Array),
     }))
+  })
+
+  it('supports a real second agent joining as Mica', async () => {
+    const session = createTurnSessionStore('agent-duo')
+    const { tools, showAgentPresence, onAgentJoined } = createHarness(session)
+
+    await tools.get('join_painting_session')!.execute({ participant: 'agent-two' })
+
+    expect(showAgentPresence).toHaveBeenCalledWith('Mica joined through WebMCP', 'agent-two')
+    expect(onAgentJoined).toHaveBeenCalledWith('agent-two')
   })
 
   it('returns the current revision and canvas state to the agent', async () => {
@@ -151,6 +161,27 @@ describe('MythWeaver WebMCP tools', () => {
     const result = await tools.get('paint_canvas_region')!.execute({ regionId: 'moon', color: 'yellow', reason: 'A warm focal point.' })
 
     expect(result.isError).toBe(true)
+    expect(paintRegion).not.toHaveBeenCalled()
+  })
+
+  it('preserves a section painted by the person', async () => {
+    const { tools, canvas, paintRegion } = createHarness()
+    canvas.readWorld = () => ({
+      shapes: [],
+      selection: [],
+      artifacts: [{ id: 'moon', label: 'Moon', fill: { color: '#f0b343', origin: 'human' } }],
+      regions: [{ id: 'moon', name: 'Moon', fill: { color: '#f0b343', origin: 'human' } }],
+    })
+
+    const result = await tools.get('paint_canvas_region')!.execute({
+      regionId: 'moon',
+      color: '#263f98',
+      reason: 'Try a cool moon.',
+      repaintOwnFill: true,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.content[0]?.text).toMatch(/belongs to the person/i)
     expect(paintRegion).not.toHaveBeenCalled()
   })
 

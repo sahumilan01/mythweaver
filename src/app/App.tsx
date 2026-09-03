@@ -251,7 +251,7 @@ export function App() {
           {!canvasState.agentPresence && (
             <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()}>
               <UserPlus weight="bold" aria-hidden="true" />
-              <span>{agentRequested ? 'Invitation copied' : 'Invite ChatGPT'}</span>
+              <span>{agentRequested ? 'Waiting for ChatGPT…' : 'Invite ChatGPT'}</span>
             </button>
           )}
           <div className="collaborator-presence" aria-label={canvasState.agentTwoPresence ? 'You, ChatGPT, and Mica are in the canvas' : canvasState.agentPresence ? 'You and ChatGPT are in the canvas' : 'You are in the canvas'}>
@@ -310,6 +310,13 @@ export function App() {
           {turnState.active === 'human' ? <PencilSimpleLine weight="bold" /> : turnState.active === 'agent-two' ? <Sparkle weight="fill" /> : <Robot weight="fill" />}
           <span><b>{turnState.finished ? 'Painting complete' : participantTurnLabel(turnState.active)}</b>{turnState.finished ? ' Pick a rule to start another round.' : `${turnState.movesRemaining} ${turnState.movesRemaining === 1 ? 'move' : 'moves'} before the brush passes.`}</span>
         </div>
+
+        {agentConnected && (
+          <aside className="mcp-live-receipt" aria-live="polite" aria-label="Live WebMCP activity">
+            <span><i /> WebMCP live</span>
+            <p>{agentActivity}</p>
+          </aside>
+        )}
 
         {!guideOpen && phase === 'ask' && !canvasState.agentPresence && (
           <aside className="pair-hint" aria-live="polite">
@@ -399,7 +406,7 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
           </button>
           <button className="sample-button" type="button" onClick={onDismiss}>I’ll look around first</button>
         </div>
-        <p className="support-note">The page never fakes ChatGPT. Its avatar appears only after a real WebMCP call reaches the canvas.</p>
+        <p className="support-note">Made for shared learning: every AI choice is named, visible, and reversible. ChatGPT’s avatar appears only after a real WebMCP call.</p>
       </section>
     </div>
   )
@@ -467,7 +474,7 @@ function ProposalCard({
         ChatGPT read your canvas and added the dashed coral shapes. This is only a suggestion.
       </p>
       <p className="counter-offer-copy">
-        Want a change? Draw over it, then tell ChatGPT what to revise.
+        Want a change? Tell ChatGPT what to revise. The idea stays pending until you decide.
       </p>
       <div className="proposal-meta">
         {proposal.elements.length} new {proposal.elements.length === 1 ? 'element' : 'elements'}
@@ -536,7 +543,7 @@ function TurnGuide({
               : 'Open this site inside ChatGPT to pair paint live. You can preview the rhythm here first.'
             : 'Your fills and ChatGPT’s fills appear on the same page as they happen. You both play by the same rule: one color, one section.'}
       </p>
-      {isAsk && <blockquote>“Paint with me in MythWeaver. Read the coloring canvas, choose two uncolored regions, and color them one at a time while I keep painting. Tell me what you changed.”</blockquote>}
+      {isAsk && <blockquote>“{SAMPLE_PROMPT}”</blockquote>}
       <div className="turn-guide-actions">
         {isStart && (
           <button className="prompt-button" type="button" onClick={onStarter} disabled={!ready}>
@@ -593,11 +600,11 @@ function AdvancedPanel({
       </button>
       <span className="advanced-kicker"><Info weight="fill" />Advanced view</span>
       <h2>How ChatGPT reaches the canvas</h2>
-      <p>WebMCP is the bridge. It lets ChatGPT work in the same painting instead of describing changes from outside it.</p>
+      <p>Most AI art is prompt-and-wait: the person asks, then receives a finished result. WebMCP turns that into supervised co-creation, where the agent works inside the same painting and every decision stays visible.</p>
       <ol className="mcp-flow">
         <li><strong>The page names every paintable region.</strong><span>ChatGPT sees the moon, fox, stars, hill, and river.</span></li>
         <li><strong>Each tool call becomes a visible move.</strong><span>ChatGPT chooses a color and fills one predefined section, just like you.</span></li>
-        <li><strong>You can paint at the same time.</strong><span>Both kinds of marks share one reactive canvas.</span></li>
+        <li><strong>You share one live canvas and turn rule.</strong><span>Every fill appears immediately, then the brush passes to the next participant.</span></li>
         <li><strong>Every paint move is reversible.</strong><span>You undo yours. ChatGPT can undo or clear its own paint.</span></li>
       </ol>
       <div className="advanced-stats">
