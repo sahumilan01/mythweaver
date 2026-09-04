@@ -24,6 +24,18 @@ describe('room client', () => {
     }))
   })
 
+  it('calls the browser fetch function with its required global receiver', async () => {
+    const request = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation')
+      return Promise.resolve(new Response(JSON.stringify({ roomId: 'room_shared123456789', version: 1, snapshot: {}, updatedAt: 1 }), { status: 200 }))
+    })
+    vi.stubGlobal('fetch', request)
+    const client = new RoomClient({ roomId: 'room_shared123456789', token: 'secret-token-1234567890-abcdef', shareUrl: 'https://example.test/' })
+    await client.read()
+    expect(request).toHaveBeenCalledOnce()
+    vi.unstubAllGlobals()
+  })
+
   it('adopts the winning room when two browser mounts create it together', async () => {
     const current = { roomId: 'room_shared123456789', version: 1, snapshot: {}, updatedAt: 1 }
     const request = vi.fn()

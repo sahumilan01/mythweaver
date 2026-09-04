@@ -45,7 +45,7 @@ export class RoomClient {
   }
 
   private async send(path: string, init: RequestInit = {}): Promise<RoomStateEnvelope> {
-    const response = await this.request(path, {
+    const response = await this.request.call(globalThis, path, {
       ...init,
       headers: {
         authorization: `Bearer ${this.credentials.token}`,
