@@ -4,8 +4,10 @@ import {
   handleImageOptimization,
 } from 'vinext/server/image-optimization'
 import handler from 'vinext/server/app-router-entry'
+import { createD1RoomRepository, ensureRoomSchema, handleRoomRequest, type D1DatabasePort } from './roomApi'
 
 interface Env {
+  DB: D1DatabasePort
   ASSETS: { fetch(request: Request): Promise<Response> }
   IMAGES: {
     input(stream: ReadableStream): {
@@ -27,6 +29,11 @@ interface WorkerContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: WorkerContext): Promise<Response> {
     const url = new URL(request.url)
+
+    if (url.pathname.startsWith('/api/rooms/') || url.pathname.startsWith('/api/agent/')) {
+      await ensureRoomSchema(env.DB)
+      return handleRoomRequest(request, createD1RoomRepository(env.DB))
+    }
 
     if (url.pathname === '/_vinext/image') {
       return handleImageOptimization(

@@ -69,6 +69,7 @@ export interface NativeCanvasPort extends CanvasPort {
   subscribe(listener: () => void): () => void
   getSnapshot(): CanvasSnapshot
   getServerSnapshot(): CanvasSnapshot
+  restore(next: CanvasSnapshot): void
   setPreviewHandler(handler: (beats: StoryBeat[]) => void): void
   showAgentPresence(label: string, agentId?: AgentId): void
   refreshAgentPresence(agentId?: AgentId): void
@@ -79,6 +80,8 @@ export interface NativeCanvasPort extends CanvasPort {
 }
 
 const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], lastAction: null, agentPresence: null, agentTwoPresence: null }
+
+export const createEmptyCanvasSnapshot = (): CanvasSnapshot => structuredClone(EMPTY_SNAPSHOT)
 
 const parseStoredSnapshot = (raw: string | null, includeLivePresence = false): CanvasSnapshot => {
   try {
@@ -109,8 +112,8 @@ const loadSnapshot = (): CanvasSnapshot => {
 const safeColor = (color: string) => /^#[0-9a-f]{6}$/i.test(color) ? color : '#d9513f'
 const originName = (origin: PaintOrigin) => origin === 'human' ? 'You' : origin === 'agent-two' ? 'Mica' : 'ChatGPT'
 
-export function createNativeCanvasPort(): NativeCanvasPort {
-  let snapshot: CanvasSnapshot = loadSnapshot()
+export function createNativeCanvasPort(initialSnapshot?: CanvasSnapshot): NativeCanvasPort {
+  let snapshot: CanvasSnapshot = initialSnapshot ? structuredClone(initialSnapshot) : loadSnapshot()
   let previewHandler: (beats: StoryBeat[]) => void = () => undefined
   const listeners = new Set<() => void>()
   const humanListeners = new Set<() => void>()
@@ -301,6 +304,10 @@ export function createNativeCanvasPort(): NativeCanvasPort {
     },
     getSnapshot: () => snapshot,
     getServerSnapshot: () => EMPTY_SNAPSHOT,
+    restore(next) {
+      snapshot = structuredClone(next)
+      listeners.forEach((listener) => listener())
+    },
     setPreviewHandler(handler) {
       previewHandler = handler
     },

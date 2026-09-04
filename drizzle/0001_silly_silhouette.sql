@@ -1,0 +1,1 @@
+CREATE INDEX `idx_painting_events_room_id_id` ON `painting_events` (`room_id`,`id`);

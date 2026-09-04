@@ -4,7 +4,9 @@
 |---|---|---|
 | Read the canvas and current turn | `get_story_world` | Complete |
 | Fill a named region | `paint_canvas_region` | Complete |
-| Add a freehand stroke | `add_canvas_stroke` | Complete |
+| Fill a predefined coloring section | `paint_canvas_region` | Complete |
+| Join and show live presence | `join_painting_session` or authenticated `/presence` | Complete |
+| Read from another browser | Authenticated `/state` | Complete |
 | Undo agent paint | `undo_agent_paint` | Complete |
 | Clear agent paint | `clear_agent_paint` | Complete |
 | Choose the session rule | Human host action | Intentionally human-only |

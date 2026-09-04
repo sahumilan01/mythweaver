@@ -7,7 +7,7 @@ MythWeaver is a live pair-painting canvas for a person and ChatGPT. It begins li
 - Human paint and ChatGPT paint appear immediately on one shared canvas.
 - Every region has a stable name, so an agent can paint the fox or river without guessing screen coordinates.
 - The activity strip says who changed what. ChatGPT paint also uses a coral outline.
-- Figma-style presence appears only after a real WebMCP call reaches the page, then shows ChatGPT moving a labeled cursor to its chosen paint target.
+- Figma-style presence appears only after a real WebMCP or authenticated agent join reaches the room, then shows ChatGPT at its chosen paint target.
 - The human host chooses the rhythm: one-and-one, two-and-two, agent showcase, or a two-agent paint-off.
 - A live turn ribbon locks the brush between turns and counts down the remaining moves.
 - Human undo affects human paint. Agent undo and clear affect agent paint only.
@@ -15,7 +15,7 @@ MythWeaver is a live pair-painting canvas for a person and ChatGPT. It begins li
 - A live WebMCP receipt shows the agent's latest read or visual decision without opening a technical panel.
 - Tool registration retries when a browser injects WebMCP after the page mounts, so every visitor can connect the agent in their own ChatGPT session.
 - Low-risk, reversible paint moves happen live. Larger story additions remain proposals that only the person can keep or remove.
-- The native SVG canvas has no production license dependency and persists locally across reloads.
+- The native SVG canvas has no production license dependency. A tokenized D1-backed room is the shared source of truth across browsers.
 
 ## WebMCP tools
 
@@ -42,7 +42,7 @@ npm install
 npm run dev
 ```
 
-Open the site in ChatGPT's in-app browser. Select **Connect your agent**, then paste the copied live URL and instructions into that user's ChatGPT conversation. The page confirms that nine tools are ready before the message is sent. ChatGPT opens the canvas, joins through `join_painting_session`, reads the fresh scene, and paints only when the turn state permits. Each visitor gets an independent browser-local painting and connects their own agent; no shared account is required. When the invitation opens in another tab of that browser, paint, presence, and turn state stay synchronized so the original tab becomes a live spectator view. **Watch Mica demo one move** is a clearly labeled deterministic fallback and does not claim to use WebMCP.
+Select **Connect your agent**, then paste the copied invitation into ChatGPT. Every invitation carries an unguessable room ID and bearer capability. A WebMCP-capable browser uses the nine page tools; other agent runtimes can use the same room's authenticated presence, state, action, and event endpoints. Both paths update one server-owned canvas, so the original page becomes a live spectator view even when the agent is in another browser. **Watch Mica demo one move** remains a clearly labeled deterministic preview and does not claim to use WebMCP.
 
 ## Verify
 
@@ -52,25 +52,24 @@ npx tsc --noEmit
 npm run build
 ```
 
-Tests cover the shared human/agent paint world, origin-specific undo, tool validation, consent state, stale revision protection, persistence, and the registered WebMCP surface.
+Tests cover tokenized room identity, bearer authorization, cross-browser state, conflict protection, turn-safe agent actions, the shared human/agent paint world, tool validation, and the registered WebMCP surface.
 
 ## Architecture
 
 ```text
 ChatGPT
-   | WebMCP: join, read, reason, fill, verify, undo
+   | WebMCP or authenticated room API
    v
-CanvasPort --------> native SVG canvas
-   |                       ^
-   |                       | tap, fill, undo
-   +--> StoryStore      person
-        proposals and consent
+Tokenized D1 room <----> CanvasPort ----> native SVG canvas
+       ^                     ^                  ^
+       | presence/state      | tools            | tap, fill, undo
+       +---------------------+                person
 ```
 
 ## First-version limits
 
-- Collaboration is between the browser-local canvas and its attached agent, with live synchronization between tabs in that browser. It is not cross-device multiplayer.
 - A webpage cannot summon the host agent. The invite button prepares the request; ChatGPT joins only after the person sends it in chat.
+- The capability URL grants access to its painting room. Anyone holding it can participate, so it should be shared only with the intended agent or collaborator.
 - Chat lives in ChatGPT rather than inside the canvas.
 - Story performances are short narrated beats, not a general animation timeline.
 

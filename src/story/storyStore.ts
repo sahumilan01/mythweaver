@@ -42,6 +42,7 @@ export interface StoryStore {
   acceptPending(): StoryContribution
   discardPending(): StoryProposal | null
   reset(): void
+  restore(next: StoryState): void
 }
 
 const initialState = (): StoryState => ({
@@ -136,6 +137,13 @@ export function createStoryStore(savedState?: StoryState): StoryStore {
     },
     reset() {
       publish(initialState())
+    },
+    restore(next) {
+      publish({
+        revision: next.revision,
+        pending: next.pending ? structuredClone(next.pending) : null,
+        contributions: structuredClone(next.contributions),
+      })
     },
   }
 }

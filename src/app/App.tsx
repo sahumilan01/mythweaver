@@ -18,79 +18,45 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { createNativeCanvasPort, NativeStoryCanvas, type AgentId } from '../canvas/nativeCanvas'
+import { createEmptyCanvasSnapshot, createNativeCanvasPort, NativeStoryCanvas, type AgentId } from '../canvas/nativeCanvas'
 import { chooseNextSectionFill } from '../canvas/paintingModel'
-import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant, type TurnSessionState } from '../session/turnSession'
+import { RoomClient, RoomRequestError, resolveRoomCredentials, type RoomStateEnvelope } from '../room/roomClient'
+import { createTurnSessionStore, SESSION_MODES, type SessionMode, type SessionParticipant } from '../session/turnSession'
 import {
   createStoryStore,
   type StoryBeat,
   type StoryProposal,
   type StoryStore,
-  type StoryState,
 } from '../story/storyStore'
 import { registerMythWeaverTools } from '../webmcp/registerTools'
+import type { SharedRoomSnapshot } from '../../worker/roomApi'
 
-const STORY_STORAGE_KEY = 'mythweaver-story-state-v1'
-const SESSION_STORAGE_KEY = 'mythweaver-session-mode-v1'
 const ONBOARDING_STORAGE_KEY = 'mythweaver-onboarding-seen-v1'
 type WebMcpStatus = 'checking' | 'ready' | 'unavailable' | 'error'
 
-function loadSessionState(): SessionMode | TurnSessionState {
-  if (typeof window === 'undefined') return 'one-one'
-  const saved = window.localStorage.getItem(SESSION_STORAGE_KEY)
-  if (!saved) return 'one-one'
-  if (saved in SESSION_MODES) return saved as SessionMode
-  try {
-    const state = JSON.parse(saved) as Partial<TurnSessionState>
-    if (
-      state.mode && state.mode in SESSION_MODES &&
-      (state.active === 'human' || state.active === 'agent' || state.active === 'agent-two') &&
-      typeof state.movesRemaining === 'number' && typeof state.round === 'number' &&
-      typeof state.finished === 'boolean'
-    ) return state as TurnSessionState
-  } catch {
-    // Fall through to the default session.
-  }
-  return 'one-one'
+const agentInviteFor = (pageUrl: string) => {
+  const url = new URL(pageUrl)
+  const roomId = url.searchParams.get('room')
+  const token = url.searchParams.get('token')
+  const api = `${url.origin}/api/agent/${roomId}`
+  return `Join my MythWeaver painting immediately: ${pageUrl}\n\nPreferred: open the page, call join_painting_session, read the live canvas, and paint only on the agent turn.\n\nIf WebMCP is unavailable, use the shared-room API with Authorization: Bearer ${token}. First POST ${api}/presence with {"type":"join","participant":"agent","takeFirstTurn":true,"label":"ChatGPT joined"}. Then GET ${api}/state. Paint one predefined section by POSTing ${api}/actions with {"type":"paint","participant":"agent","regionId":"<open id>","color":"<hex>","reason":"<brief visual reason>"}. Read state after each move and stop as soon as the turn returns to the human.`
 }
-
-function loadStoryState(): StoryState | undefined {
-  if (typeof window === 'undefined') return undefined
-  try {
-    const raw = window.localStorage.getItem(STORY_STORAGE_KEY)
-    if (!raw) return undefined
-    const state = JSON.parse(raw) as Partial<StoryState>
-    if (
-      typeof state.revision !== 'number' ||
-      !Array.isArray(state.contributions) ||
-      !('pending' in state)
-    ) {
-      return undefined
-    }
-    return state as StoryState
-  } catch {
-    return undefined
-  }
-}
-
-const agentInviteFor = (pageUrl: string) =>
-  `Open my MythWeaver canvas: ${pageUrl}\n\nJoin this painting through WebMCP and take the first turn. Call join_painting_session, read the live canvas, follow my turn rule, and choose each predefined section and color with visual judgment. Explain each choice briefly, paint only when it is an agent turn, and stop when the brush passes back to me.`
 
 function useStoryState(story: StoryStore) {
   return useSyncExternalStore(story.subscribe, story.getState, story.getState)
 }
 
 export function App() {
-  const [story] = useState(() => createStoryStore(loadStoryState()))
-  const [canvas] = useState(() => createNativeCanvasPort())
-  const [turnSession] = useState(() => createTurnSessionStore(loadSessionState()))
-  const [guideOpen, setGuideOpen] = useState(() => {
-    const saved = canvas.getSnapshot()
-    return Object.keys(saved.fills).length === 0 && saved.shapes.length === 0
-  })
+  const [story] = useState(() => createStoryStore())
+  const [canvas] = useState(() => createNativeCanvasPort(createEmptyCanvasSnapshot()))
+  const [turnSession] = useState(() => createTurnSessionStore('one-one'))
+  const [guideOpen, setGuideOpen] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [rulesOpen, setRulesOpen] = useState(false)
-  const [onboardingOpen, setOnboardingOpen] = useState(() => typeof window === 'undefined' || window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'true')
+  const [onboardingOpen, setOnboardingOpen] = useState(true)
+  const [roomReady, setRoomReady] = useState(false)
+  const [roomStatus, setRoomStatus] = useState('Creating your private painting room…')
+  const [roomCode, setRoomCode] = useState('starting')
   const [agentRequested, setAgentRequested] = useState(false)
   const [webMcpStatus, setWebMcpStatus] = useState<WebMcpStatus>('checking')
   const [shareUrl, setShareUrl] = useState('this MythWeaver page')
@@ -108,43 +74,102 @@ export function App() {
     .sort((a, b) => b.updatedAt - a.updatedAt)[0]
   const visibleAgentActivity = latestPresence?.label ?? agentActivity
   const webMcpReady = webMcpStatus === 'ready'
-  const applyingRemoteSession = useRef(false)
   const hostedAgents = useRef(new Set<AgentId>())
+  const roomClient = useRef<RoomClient | null>(null)
+  const roomVersion = useRef(0)
+  const applyingRoom = useRef(false)
+  const roomWriteTimer = useRef<number | null>(null)
+  const roomWriteChain = useRef<Promise<void>>(Promise.resolve())
 
-  useEffect(() => {
-    setShareUrl(`${window.location.origin}${window.location.pathname}`)
-  }, [])
+  const roomSnapshot = useCallback((): SharedRoomSnapshot => ({
+    canvas: canvas.getSnapshot(),
+    turnSession: turnSession.getState(),
+    story: story.getState(),
+  }), [canvas, story, turnSession])
 
-  useEffect(
-    () => story.subscribe(() => {
-      window.localStorage.setItem(STORY_STORAGE_KEY, JSON.stringify(story.getState()))
-    }),
-    [story],
-  )
+  const applyRoomEnvelope = useCallback((envelope: RoomStateEnvelope) => {
+    roomVersion.current = envelope.version
+    applyingRoom.current = true
+    canvas.restore(envelope.snapshot.canvas)
+    turnSession.restore(envelope.snapshot.turnSession)
+    story.restore(envelope.snapshot.story)
+    applyingRoom.current = false
+  }, [canvas, story, turnSession])
 
-  useEffect(() => {
-    const unsubscribe = turnSession.subscribe(() => {
-      if (applyingRemoteSession.current) {
-        applyingRemoteSession.current = false
-        return
-      }
-      window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(turnSession.getState()))
-    })
-    const syncSession = (event: StorageEvent) => {
-      if (event.key !== SESSION_STORAGE_KEY || !event.newValue) return
+  const pullRoom = useCallback(async () => {
+    const client = roomClient.current
+    if (!client) return
+    const envelope = await client.read()
+    if (envelope.version > roomVersion.current) applyRoomEnvelope(envelope)
+  }, [applyRoomEnvelope])
+
+  const flushRoom = useCallback(async (eventType = 'state') => {
+    if (roomWriteTimer.current !== null) {
+      window.clearTimeout(roomWriteTimer.current)
+      roomWriteTimer.current = null
+    }
+    roomWriteChain.current = roomWriteChain.current.then(async () => {
+      const client = roomClient.current
+      if (!client || applyingRoom.current) return
       try {
-        applyingRemoteSession.current = true
-        turnSession.restore(JSON.parse(event.newValue) as TurnSessionState)
+        const envelope = await client.write(roomVersion.current, roomSnapshot(), eventType)
+        roomVersion.current = envelope.version
+      } catch (error) {
+        if (error instanceof RoomRequestError && error.status === 409 && error.current) {
+          applyRoomEnvelope(error.current)
+          return
+        }
+        setRoomStatus('Connection interrupted — retrying…')
+      }
+    })
+    return roomWriteChain.current
+  }, [applyRoomEnvelope, roomSnapshot])
+
+  useEffect(() => {
+    let cancelled = false
+    let pollTimer: number | undefined
+    let unsubscribers: Array<() => void> = []
+    const credentials = resolveRoomCredentials(window.location.href)
+    window.history.replaceState({}, '', credentials.shareUrl)
+    setShareUrl(credentials.shareUrl)
+    setRoomCode(credentials.roomId.slice(-6).toUpperCase())
+    setOnboardingOpen(window.localStorage.getItem(ONBOARDING_STORAGE_KEY) !== 'true')
+    const client = new RoomClient(credentials)
+    roomClient.current = client
+
+    const start = async () => {
+      try {
+        let envelope: RoomStateEnvelope
+        try {
+          envelope = await client.read()
+        } catch (error) {
+          if (!(error instanceof RoomRequestError) || error.status !== 401) throw error
+          envelope = await client.create(roomSnapshot())
+        }
+        if (cancelled) return
+        applyRoomEnvelope(envelope)
+        setRoomReady(true)
+        setRoomStatus('Private live room ready')
+        setGuideOpen(Object.keys(envelope.snapshot.canvas.fills).length === 0)
+
+        const scheduleWrite = () => {
+          if (applyingRoom.current || roomWriteTimer.current !== null) return
+          roomWriteTimer.current = window.setTimeout(() => void flushRoom('canvas_changed'), 80)
+        }
+        unsubscribers = [canvas.subscribe(scheduleWrite), turnSession.subscribe(scheduleWrite), story.subscribe(scheduleWrite)]
+        pollTimer = window.setInterval(() => void pullRoom().catch(() => setRoomStatus('Connection interrupted — retrying…')), 500)
       } catch {
-        applyingRemoteSession.current = false
+        if (!cancelled) setRoomStatus('Could not create the live room. Reload to retry.')
       }
     }
-    window.addEventListener('storage', syncSession)
+    void start()
     return () => {
-      unsubscribe()
-      window.removeEventListener('storage', syncSession)
+      cancelled = true
+      unsubscribers.forEach((unsubscribe) => unsubscribe())
+      if (pollTimer) window.clearInterval(pollTimer)
+      if (roomWriteTimer.current !== null) window.clearTimeout(roomWriteTimer.current)
     }
-  }, [turnSession])
+  }, [applyRoomEnvelope, canvas, flushRoom, pullRoom, roomSnapshot, story, turnSession])
 
   const startPerformance = useCallback((beats: StoryBeat[]) => {
     if (beats.length > 0) setPlayback({ beats, index: 0 })
@@ -175,6 +200,7 @@ export function App() {
   }, [canvas])
 
   useEffect(() => {
+    if (!roomReady) return
     let disposeTools: (() => void) | undefined
     let retryTimer: number | undefined
     let attempts = 0
@@ -196,6 +222,8 @@ export function App() {
         story,
         canvas,
         turnSession,
+        beforeRead: pullRoom,
+        afterMutation: flushRoom,
         onAgentActivity: setAgentActivity,
         onAgentJoined: (participant) => {
           hostedAgents.current.add(participant)
@@ -215,7 +243,7 @@ export function App() {
       if (retryTimer) window.clearTimeout(retryTimer)
       disposeTools?.()
     }
-  }, [canvas, story, turnSession])
+  }, [canvas, flushRoom, pullRoom, roomReady, story, turnSession])
 
   useEffect(() => {
     if (!playback || !canvas) return
@@ -329,13 +357,13 @@ export function App() {
           </span>
           <div>
             <strong>MythWeaver</strong>
-            <span>Paint the same page together</span>
+            <span>{roomReady ? `Room ${roomCode} · live` : roomStatus}</span>
           </div>
         </div>
 
         <div className="header-actions">
           {!agentConnected && (
-            <button className="invite-agent-button" type="button" onClick={() => void inviteAgent()} aria-label={agentRequested ? 'Agent invite copied' : 'Connect your agent'}>
+            <button className="invite-agent-button" type="button" disabled={!roomReady} onClick={() => void inviteAgent()} aria-label={agentRequested ? 'Agent invite copied' : 'Connect your agent'}>
               <UserPlus weight="bold" aria-hidden="true" />
               <span>{agentRequested ? 'Agent link copied' : 'Connect your agent'}</span>
             </button>
@@ -355,7 +383,7 @@ export function App() {
               </span>
             )}
           </div>
-          <button className="session-chip" type="button" onClick={() => { setRulesOpen(true); setGuideOpen(false) }} aria-label="Change painting rules">
+          <button className="session-chip" type="button" disabled={!roomReady} onClick={() => { setRulesOpen(true); setGuideOpen(false) }} aria-label="Change painting rules">
             <span>{SESSION_MODES[turnState.mode].shortLabel}</span>
             <b>{turnState.finished ? 'Page complete' : participantTurnLabel(turnState.active)}</b>
             {!turnState.finished && turnState.movesRemaining > 1 && <i>{turnState.movesRemaining} moves</i>}
@@ -390,7 +418,7 @@ export function App() {
       </header>
 
       <section className="canvas-stage" aria-label="MythWeaver story canvas">
-        <NativeStoryCanvas canvas={canvas} humanCanPaint={turnSession.canMove('human')} />
+        <NativeStoryCanvas canvas={canvas} humanCanPaint={roomReady && turnSession.canMove('human')} />
 
         <div className={`turn-ribbon turn-ribbon-${turnState.active}`} aria-live="polite">
           {turnState.active === 'human' ? <PencilSimpleLine weight="bold" /> : turnState.active === 'agent-two' ? <Sparkle weight="fill" /> : <Robot weight="fill" />}
@@ -428,7 +456,7 @@ export function App() {
             onSample={stageSample}
             onStarter={addStarter}
             onClose={() => setGuideOpen(false)}
-            ready
+            ready={roomReady}
           />
         )}
 
@@ -482,7 +510,7 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
         <span className="welcome-symbol" aria-hidden="true"><MoonStars weight="fill" /></span>
         <p className="welcome-kicker">Your first painting</p>
         <h1 id="welcome-title">Bring your agent into the canvas</h1>
-        <p className="welcome-copy">Copy this live page for your ChatGPT agent. It opens the same canvas, reads every paintable section through WebMCP, then works beside you.</p>
+        <p className="welcome-copy">Every painting now has its own private room. Copy its secure invitation so your agent can join, read the same sections, and paint beside you.</p>
         <div className="consent-flow" aria-label="How pair painting works">
           <span><UserPlus weight="bold" aria-hidden="true" /> Copy live canvas</span>
           <span><Robot weight="fill" aria-hidden="true" /> Paste to your agent</span>
@@ -494,7 +522,7 @@ function FirstRunOnboarding({ onInvite, onDismiss }: { onInvite: () => void; onD
           </button>
           <button className="sample-button" type="button" onClick={onDismiss}>I’ll look around first</button>
         </div>
-        <p className="support-note">Fast, free, and no login required. Each visitor connects their own agent; its avatar appears only after a real WebMCP call.</p>
+        <p className="support-note">No agent account setup. Its avatar appears only after the room receives a real WebMCP or authenticated agent API join.</p>
       </section>
     </div>
   )
@@ -630,9 +658,9 @@ function TurnGuide({
           : isAsk
             ? webMcpReady
               ? agentRequested
-                ? 'The live page and instructions are copied. Paste them into ChatGPT; its avatar appears after the first WebMCP call.'
-                : 'Copy this live page into ChatGPT. WebMCP lets your agent read and color the same picture with you.'
-              : 'Open this site inside ChatGPT to pair paint live. You can preview the rhythm here first.'
+                ? 'The private room and its instructions are copied. Paste them into ChatGPT; its avatar appears after a real join request.'
+                : 'Copy this private room into ChatGPT. WebMCP lets your agent read and color the same picture with you.'
+              : 'Direct WebMCP is not available in this browser. The secure invitation includes an agent API fallback, so ChatGPT can still join.'
             : 'Your fills and ChatGPT’s fills appear on the same page as they happen. You both play by the same rule: one color, one section.'}
       </p>
       {isAsk && (
@@ -644,10 +672,10 @@ function TurnGuide({
               ? 'Checking this browser for WebMCP…'
               : webMcpStatus === 'error'
                 ? 'Tool registration failed — reload inside ChatGPT'
-                : 'WebMCP is not available here — open this page inside ChatGPT'}</span>
+                : 'Secure room API ready · WebMCP available when supported'}</span>
         </div>
       )}
-      {isAsk && <blockquote><strong>{shareUrl}</strong><br />Open this canvas, join through WebMCP, follow my turn rule, and explain each color choice.</blockquote>}
+      {isAsk && <blockquote><strong>Private room {new URL(shareUrl).searchParams.get('room')?.slice(-6).toUpperCase()}</strong><br />The copied invitation includes the room link, join endpoint, live state endpoint, and turn-safe paint action.</blockquote>}
       <div className="turn-guide-actions">
         {isStart && (
           <button className="prompt-button" type="button" onClick={onStarter} disabled={!ready}>
@@ -656,7 +684,7 @@ function TurnGuide({
           </button>
         )}
         {isAsk && (
-          <button className="prompt-button" type="button" onClick={onCopy}>
+          <button className="prompt-button" type="button" onClick={onCopy} disabled={!ready}>
             <Copy weight="bold" aria-hidden="true" />
             {copied ? 'Copied — paste to your agent' : 'Copy page + instructions'}
           </button>

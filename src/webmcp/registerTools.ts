@@ -90,6 +90,8 @@ interface RegisterToolsOptions {
   onAgentActivity?: (message: string) => void
   onAgentJoined?: (participant: 'agent' | 'agent-two') => void
   onRegistrationError?: (toolName: string, error: unknown) => void
+  beforeRead?: () => Promise<void>
+  afterMutation?: (eventType?: string) => Promise<void>
 }
 
 const roles = new Set<StoryRole>(['character', 'place', 'object', 'event'])
@@ -262,6 +264,8 @@ export function registerMythWeaverTools({
   onAgentActivity,
   onAgentJoined,
   onRegistrationError,
+  beforeRead,
+  afterMutation,
 }: RegisterToolsOptions): () => void {
   const controller = new AbortController()
   const register = (tool: RegisteredTool) => {
@@ -338,8 +342,9 @@ export function registerMythWeaverTools({
         },
       },
     },
-    execute: (input) => {
+    execute: async (input) => {
       try {
+        await beforeRead?.()
         const root = object(input)
         const participant = root.participant === 'agent-two' ? 'agent-two' : 'agent'
         const name = participantName(participant)
@@ -347,6 +352,7 @@ export function registerMythWeaverTools({
         canvas.showAgentPresence(`${name} joined through WebMCP`, participant)
         onAgentJoined?.(participant)
         onAgentActivity?.(`${name} joined through WebMCP and is reading the live canvas before choosing.`)
+        await afterMutation?.('agent_joined')
         const briefing = sessionBriefing()
         return success(
           `Joined the shared canvas through WebMCP. ${briefing.recommendedNextAction}`,
@@ -365,7 +371,8 @@ export function registerMythWeaverTools({
       'Read the visible canvas before painting. Returns every predefined section with its bounds, center, current fill, suggested colors, scene relationships, and next valid fill.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     annotations: { readOnlyHint: true, untrustedContentHint: true },
-    execute: () => {
+    execute: async () => {
+      await beforeRead?.()
       const briefing = sessionBriefing()
       canvas.showAgentPresence('Reading the live canvas through WebMCP')
       onAgentJoined?.('agent')
@@ -397,6 +404,7 @@ export function registerMythWeaverTools({
     },
     execute: async (input) => {
       try {
+        await beforeRead?.()
         const root = object(input)
         const regionId = string(root.regionId, 'regionId', 48)
         const paintColor = color(root.color)
@@ -424,6 +432,7 @@ export function registerMythWeaverTools({
         const remainingArtifacts = canvas.readWorld().artifacts
         const hasOpenRegion = Array.isArray(remainingArtifacts) && remainingArtifacts.some((artifact) => !object(artifact).fill)
         if (!hasOpenRegion) turnSession?.finish()
+        await afterMutation?.('agent_painted')
         const briefing = sessionBriefing()
         onAgentActivity?.(`${participantName(participant)} colored ${regionId} ${paintColor} through WebMCP — ${reason}`)
         return success(`Painted ${regionId} ${paintColor} through WebMCP because ${reason} ${briefing.recommendedNextAction}`, {
