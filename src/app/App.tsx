@@ -39,7 +39,7 @@ const agentInviteFor = (pageUrl: string) => {
   const roomId = url.searchParams.get('room')
   const token = url.searchParams.get('token')
   const api = `${url.origin}/api/agent/${roomId}`
-  return `Join my MythWeaver painting immediately: ${pageUrl}\n\nPreferred: open the page, call join_painting_session, and read the live canvas. Keep painting while the active turn belongs to an agent. In AI + AI mode, alternate ChatGPT and Mica exactly as the live turn state directs. Stop only when the turn returns to the human or the painting is complete.\n\nIf WebMCP is unavailable, use the shared-room API with Authorization: Bearer ${token}. First POST ${api}/presence with {"type":"join","participant":"agent","takeFirstTurn":true,"label":"ChatGPT joined"}. Then GET ${api}/state. Fill one predefined section at a time by POSTing ${api}/actions with {"type":"paint","participant":"<active agent>","regionId":"<open id>","color":"<hex>","reason":"<brief visual reason>"}. Read state after every move and immediately continue through consecutive agent turns until a human turn or a completed page.`
+  return `Join my MythWeaver painting immediately and stay for the whole live session: ${pageUrl}\n\nPreferred: open the page, call join_painting_session, and read the live canvas. Paint one predefined section whenever an agent owns the active turn. When it becomes the human turn, do not exit: call wait_for_painting_turn with {"timeoutMs":25000} repeatedly. As soon as the brush returns, read the fresh canvas and paint the next legal section. In AI + AI mode, alternate ChatGPT and Mica exactly as the live turn directs. Stop only when the painting is complete, I ask you to stop, or the room fails repeatedly.\n\nIf WebMCP is unavailable, use the shared-room API with Authorization: Bearer ${token}. First POST ${api}/presence with {"type":"join","participant":"agent","takeFirstTurn":true,"label":"ChatGPT joined"}. Then GET ${api}/state. Fill one predefined section by POSTing ${api}/actions with {"type":"paint","participant":"<active agent>","regionId":"<open id>","color":"<hex>","reason":"<brief visual reason>"}. After each move, read state. During a human turn, stay connected: POST presence every 20 seconds and poll ${api}/events/pending?after=<last-seen-id> every second; refresh state when an event appears. Continue immediately when an agent becomes active. Never overwrite human paint.`
 }
 
 function useStoryState(story: StoryStore) {
@@ -208,7 +208,7 @@ export function App() {
       }
 
       setWebMcpStatus('ready')
-      setAgentActivity('WebMCP is ready. This browser’s ChatGPT agent can discover 9 live canvas tools.')
+      setAgentActivity('WebMCP is ready. This browser’s ChatGPT agent can discover 10 live canvas tools.')
       disposeTools = registerMythWeaverTools({
         modelContext: document.modelContext,
         story,
@@ -686,7 +686,7 @@ function TurnGuide({
         <div className={`mcp-readiness is-${webMcpStatus}`}>
           <i />
           <span>{webMcpStatus === 'ready'
-            ? '9 WebMCP tools ready for your agent'
+            ? '10 WebMCP tools ready for your agent'
             : webMcpStatus === 'checking'
               ? 'Checking this browser for WebMCP…'
               : webMcpStatus === 'error'

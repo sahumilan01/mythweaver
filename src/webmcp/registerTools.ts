@@ -81,6 +81,7 @@ interface RegisterToolsOptions {
   canvas: CanvasPort
   turnSession?: {
     getState(): TurnSessionState
+    subscribe(listener: () => void): () => void
     startWith(participant: SessionParticipant): void
     canMove(participant: SessionParticipant): boolean
     noteMove(participant: SessionParticipant): boolean
@@ -298,7 +299,7 @@ export function registerMythWeaverTools({
       ? 'The page is complete. Stop and tell the person what the session created.'
       : agentMayPaint
         ? `It is ${participantName(active)}'s turn. Choose one open region and a harmonious color, then call paint_canvas_region with a concise visual reason.`
-        : `It is the person's turn. Do not paint. Invite them to choose a color and fill ${sessionState?.movesRemaining ?? 1} section${sessionState?.movesRemaining === 1 ? '' : 's'}.`
+        : `It is the person's turn. Do not paint. Call wait_for_painting_turn so you stay in the session and wake as soon as they pass the brush back.`
 
     return {
       revision: state.revision,
@@ -315,7 +316,7 @@ export function registerMythWeaverTools({
         'Treat the person’s existing colors as creative intent. You may echo one for unity or choose a suggested contrasting color for balance.',
         'Choose with visual judgment: connect related artifacts, distribute warm and cool colors, and avoid repainting unless the person asks.',
         'Make one atomic fill per paint_canvas_region call. Include a short reason the person can see while your cursor moves.',
-        'After every fill, inspect the returned turnSession. Continue only while the active participant is an agent; otherwise stop and hand the brush back.',
+        'After every fill, inspect the returned turnSession. Paint again while an agent is active. During a human turn, call wait_for_painting_turn instead of ending the session.',
         'Only the person may accept or discard a proposed story contribution.',
       ],
       consentRule: 'You may propose or revise. Only the person can accept or discard in the canvas UI.',
@@ -383,6 +384,79 @@ export function registerMythWeaverTools({
         `Read live canvas revision ${briefing.revision}. ${filledRegions} of ${regionCount} sections are filled. ${briefing.recommendedNextAction}`,
         briefing,
       )
+    },
+  })
+
+  register({
+    name: 'wait_for_painting_turn',
+    title: 'Wait for the painting turn',
+    description:
+      'Stay connected during the person’s turn and return as soon as the live brush passes to ChatGPT or Mica. Call this repeatedly instead of ending a collaborative session.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        timeoutMs: {
+          type: 'number',
+          minimum: 250,
+          maximum: 25000,
+          description: 'How long to wait for a live turn change. Use 25000 for the fastest persistent collaboration.',
+        },
+      },
+    },
+    annotations: { readOnlyHint: true, untrustedContentHint: false },
+    execute: async (input) => {
+      try {
+        await beforeRead?.()
+        const root = object(input)
+        const timeoutMs = root.timeoutMs === undefined
+          ? 25_000
+          : number(root.timeoutMs, 'timeoutMs', 250, 25_000)
+        let sessionState = turnSession?.getState()
+
+        if (turnSession && sessionState?.active === 'human' && !sessionState.finished) {
+          await new Promise<void>((resolve) => {
+            let settled = false
+            let unsubscribe: () => void = () => undefined
+            const finish = () => {
+              if (settled) return
+              settled = true
+              globalThis.clearTimeout(timer)
+              unsubscribe()
+              resolve()
+            }
+            const timer = globalThis.setTimeout(finish, timeoutMs)
+            unsubscribe = turnSession.subscribe(() => {
+              const next = turnSession.getState()
+              if (next.active !== 'human' || next.finished) finish()
+            })
+          })
+          await beforeRead?.()
+          sessionState = turnSession.getState()
+        }
+
+        const briefing = sessionBriefing()
+        const status = sessionState?.finished || briefing.openRegions.length === 0
+          ? 'complete'
+          : briefing.agentMayPaint
+            ? 'agent_turn'
+            : 'human_turn'
+        onAgentActivity?.(status === 'agent_turn'
+          ? `${participantName(sessionState?.active ?? 'agent')} has the brush and is choosing now.`
+          : status === 'complete'
+            ? 'The painting is complete.'
+            : 'ChatGPT is connected and waiting for your move.')
+        return success(
+          status === 'agent_turn'
+            ? `The brush is back. ${briefing.recommendedNextAction}`
+            : status === 'complete'
+              ? 'The painting is complete.'
+              : `Still connected; it remains the person's turn. Call wait_for_painting_turn again immediately.`,
+          { status, ...briefing },
+        )
+      } catch (error) {
+        return failure(error)
+      }
     },
   })
 

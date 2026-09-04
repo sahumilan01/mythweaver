@@ -71,6 +71,7 @@ describe('MythWeaver WebMCP tools', () => {
     expect([...tools.keys()]).toEqual([
       'join_painting_session',
       'get_story_world',
+      'wait_for_painting_turn',
       'paint_canvas_region',
       'undo_agent_paint',
       'clear_agent_paint',
@@ -127,6 +128,23 @@ describe('MythWeaver WebMCP tools', () => {
       }),
     )
     expect(result.content[0]?.text).toMatch(/revision 0/i)
+  })
+
+  it('waits through the human move and wakes as soon as the brush passes to ChatGPT', async () => {
+    const session = createTurnSessionStore('one-one')
+    const { tools } = createHarness(session)
+
+    const waiting = tools.get('wait_for_painting_turn')!.execute({ timeoutMs: 1_000 })
+    await Promise.resolve()
+    session.noteMove('human')
+    const result = await waiting
+
+    expect(result.isError).not.toBe(true)
+    expect(result.structuredContent).toEqual(expect.objectContaining({
+      status: 'agent_turn',
+      agentMayPaint: true,
+      turnSession: expect.objectContaining({ active: 'agent' }),
+    }))
   })
 
   it('lets the agent paint one named region immediately', async () => {
