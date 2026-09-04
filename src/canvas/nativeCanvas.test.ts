@@ -116,7 +116,7 @@ describe('native pair-paint canvas', () => {
     expect(regions.find((region) => region.id === 'river')?.fill?.origin).toBe('agent-two')
   })
 
-  it('mirrors agent paint and presence into another tab', () => {
+  it('does not leak one room canvas into another through global browser storage', () => {
     const values = new Map<string, string>()
     const storageListeners: Array<(event: { key: string; newValue: string }) => void> = []
     vi.stubGlobal('window', {
@@ -129,16 +129,15 @@ describe('native pair-paint canvas', () => {
       },
     })
 
-    const watchingTab = createNativeCanvasPort()
-    const agentTab = createNativeCanvasPort()
-    agentTab.paintRegion('moon', '#f0b343', 'agent')
-    agentTab.showAgentPresence('WebMCP • Balances the cool river', 'agent')
+    const roomOne = createNativeCanvasPort()
+    const roomTwo = createNativeCanvasPort()
+    roomOne.paintRegion('moon', '#f0b343', 'agent')
+    roomOne.showAgentPresence('WebMCP • Balances the cool river', 'agent')
 
-    const raw = values.get('mythweaver-pair-painting-v1') ?? ''
-    storageListeners.forEach((listener) => listener({ key: 'mythweaver-pair-painting-v1', newValue: raw }))
-
-    expect(watchingTab.getSnapshot().fills.moon).toEqual({ color: '#f0b343', origin: 'agent' })
-    expect(watchingTab.getSnapshot().agentPresence?.label).toBe('WebMCP • Balances the cool river')
+    expect(values.size).toBe(0)
+    expect(storageListeners).toHaveLength(0)
+    expect(roomTwo.getSnapshot().fills.moon).toBeUndefined()
+    expect(roomTwo.getSnapshot().agentPresence).toBeNull()
   })
 
   it('expires a disconnected agent presence lease', () => {

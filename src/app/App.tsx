@@ -152,7 +152,7 @@ export function App() {
           roomWriteTimer.current = window.setTimeout(() => void flushRoom('canvas_changed'), 80)
         }
         unsubscribers = [canvas.subscribe(scheduleWrite), turnSession.subscribe(scheduleWrite), story.subscribe(scheduleWrite)]
-        pollTimer = window.setInterval(() => void pullRoom().catch(() => setRoomStatus('Connection interrupted — retrying…')), 500)
+        pollTimer = window.setInterval(() => void pullRoom().catch(() => setRoomStatus('Connection interrupted — retrying…')), 150)
       } catch {
         if (!cancelled) setRoomStatus('Could not create the live room. Reload to retry.')
       }
@@ -181,16 +181,11 @@ export function App() {
 
   useEffect(() => {
     const refreshPresence = () => hostedAgents.current.forEach((agentId) => canvas.refreshAgentPresence(agentId))
-    // Remote agents refresh through the room API rather than this tab's 2s loop.
-    // Keep their presence alive across the one-minute collaboration heartbeat.
-    const expirePresence = () => canvas.expireAgentPresence(120000)
     const disconnect = () => hostedAgents.current.forEach((agentId) => canvas.hideAgentPresence(agentId))
     const heartbeatTimer = window.setInterval(refreshPresence, 2000)
-    const expiryTimer = window.setInterval(expirePresence, 1000)
     window.addEventListener('pagehide', disconnect)
     return () => {
       window.clearInterval(heartbeatTimer)
-      window.clearInterval(expiryTimer)
       window.removeEventListener('pagehide', disconnect)
       disconnect()
     }

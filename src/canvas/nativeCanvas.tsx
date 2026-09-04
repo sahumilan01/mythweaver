@@ -8,7 +8,6 @@ import type { StoryBeat, StoryElement, StoryProposal } from '../story/storyStore
 import type { CanvasPort, ProposalDraft, ProposalShape } from '../webmcp/registerTools'
 import { ARTIFACT_RELATIONS, PAINT_ARTIFACTS, SCENE_PALETTE, chooseNextSectionFill } from './paintingModel'
 
-const CANVAS_STORAGE_KEY = 'mythweaver-pair-painting-v1'
 const VIEWBOX_WIDTH = 1200
 const VIEWBOX_HEIGHT = 700
 
@@ -84,37 +83,11 @@ const EMPTY_SNAPSHOT: CanvasSnapshot = { shapes: [], fills: {}, focusedIds: [], 
 
 export const createEmptyCanvasSnapshot = (): CanvasSnapshot => structuredClone(EMPTY_SNAPSHOT)
 
-const parseStoredSnapshot = (raw: string | null, includeLivePresence = false): CanvasSnapshot => {
-  try {
-    const value = JSON.parse(raw ?? '{}')
-    const rawShapes = Array.isArray(value.shapes) ? value.shapes : []
-    const shapes = rawShapes.filter((shape: { type?: string }) => shape?.type !== 'stroke') as CanvasShape[]
-    const removedFreehandMarks = shapes.length !== rawShapes.length
-    return {
-      shapes,
-      fills: value.fills && typeof value.fills === 'object' ? value.fills : {},
-      focusedIds: Array.isArray(value.focusedIds) ? value.focusedIds : [],
-      lastAction: !removedFreehandMarks && (value.lastAction?.origin === 'human' || value.lastAction?.origin === 'agent' || value.lastAction?.origin === 'agent-two')
-        ? value.lastAction
-        : null,
-      agentPresence: includeLivePresence && value.agentPresence && typeof value.agentPresence.updatedAt === 'number' ? value.agentPresence : null,
-      agentTwoPresence: includeLivePresence && value.agentTwoPresence && typeof value.agentTwoPresence.updatedAt === 'number' ? value.agentTwoPresence : null,
-    }
-  } catch {
-    return EMPTY_SNAPSHOT
-  }
-}
-
-const loadSnapshot = (): CanvasSnapshot => {
-  if (typeof window === 'undefined') return EMPTY_SNAPSHOT
-  return parseStoredSnapshot(window.localStorage.getItem(CANVAS_STORAGE_KEY))
-}
-
 const safeColor = (color: string) => /^#[0-9a-f]{6}$/i.test(color) ? color : '#d9513f'
 const originName = (origin: PaintOrigin) => origin === 'human' ? 'You' : origin === 'agent-two' ? 'Mica' : 'ChatGPT'
 
 export function createNativeCanvasPort(initialSnapshot?: CanvasSnapshot): NativeCanvasPort {
-  let snapshot: CanvasSnapshot = initialSnapshot ? structuredClone(initialSnapshot) : loadSnapshot()
+  let snapshot: CanvasSnapshot = structuredClone(initialSnapshot ?? EMPTY_SNAPSHOT)
   let previewHandler: (beats: StoryBeat[]) => void = () => undefined
   const listeners = new Set<() => void>()
   const humanListeners = new Set<() => void>()
@@ -122,25 +95,7 @@ export function createNativeCanvasPort(initialSnapshot?: CanvasSnapshot): Native
 
   const publish = (next: CanvasSnapshot) => {
     snapshot = next
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(CANVAS_STORAGE_KEY, JSON.stringify({
-        shapes: next.shapes,
-        fills: next.fills,
-        focusedIds: next.focusedIds,
-        lastAction: next.lastAction,
-        agentPresence: next.agentPresence,
-        agentTwoPresence: next.agentTwoPresence,
-      }))
-    }
     listeners.forEach((listener) => listener())
-  }
-
-  if (typeof window !== 'undefined') {
-    window.addEventListener('storage', (event) => {
-      if (event.key !== CANVAS_STORAGE_KEY || !event.newValue) return
-      snapshot = parseStoredSnapshot(event.newValue, true)
-      listeners.forEach((listener) => listener())
-    })
   }
 
   const announceHumanChange = () => humanListeners.forEach((listener) => listener())
