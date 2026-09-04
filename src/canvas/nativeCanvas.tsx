@@ -63,6 +63,7 @@ export interface NativeCanvasPort extends CanvasPort {
   addHumanStarter(): void
   paintRegion(regionId: string, color: string, origin: PaintOrigin): void
   clearPaint(origin: PaintOrigin): void
+  resetPainting(): void
   undoLast(origin: PaintOrigin): boolean
   commitProposal(proposal: StoryProposal): void
   subscribeToHumanChanges(listener: () => void): () => void
@@ -247,6 +248,15 @@ export function createNativeCanvasPort(initialSnapshot?: CanvasSnapshot): Native
       removedFills.forEach(([id]) => delete fills[id as RegionId])
       publish({ ...snapshot, shapes: snapshot.shapes.filter((shape) => shape.origin !== origin), fills, lastAction: { origin, label: `Cleared ${origin === 'agent' ? 'ChatGPT’s' : 'your'} paint` } })
       if (origin === 'human') announceHumanChange()
+    },
+    resetPainting() {
+      actions.length = 0
+      publish({
+        ...createEmptyCanvasSnapshot(),
+        agentPresence: snapshot.agentPresence,
+        agentTwoPresence: snapshot.agentTwoPresence,
+        lastAction: { origin: 'human', label: 'You started a new painting' },
+      })
     },
     undoLast(origin) {
       const index = actions.findLastIndex((action) => action.origin === origin)

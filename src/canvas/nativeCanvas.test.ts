@@ -69,6 +69,23 @@ describe('native pair-paint canvas', () => {
     expect(regions.find((region) => region.id === 'river')?.fill).toBeNull()
   })
 
+  it('starts a clean painting while keeping connected collaborators present', () => {
+    const canvas = createNativeCanvasPort()
+    canvas.showAgentPresence('ChatGPT joined')
+    canvas.paintRegion('moon', '#f0b343', 'human')
+    canvas.paintRegion('river', '#263f98', 'agent')
+
+    canvas.resetPainting()
+
+    expect(canvas.getSnapshot()).toMatchObject({
+      fills: {},
+      shapes: [],
+      agentPresence: expect.objectContaining({ label: 'Painted Winding river' }),
+      lastAction: { origin: 'human', label: 'You started a new painting' },
+    })
+    expect(canvas.undoLast('human')).toBe(false)
+  })
+
   it('shows ChatGPT joining and moves its labeled cursor to the target region', async () => {
     const canvas = createNativeCanvasPort()
 

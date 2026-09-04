@@ -61,6 +61,7 @@ export function App() {
   const [webMcpStatus, setWebMcpStatus] = useState<WebMcpStatus>('checking')
   const [shareUrl, setShareUrl] = useState('this MythWeaver page')
   const [copied, setCopied] = useState(false)
+  const [resetArmed, setResetArmed] = useState(false)
   const [agentActivity, setAgentActivity] = useState('Waiting for your first mark.')
   const [playback, setPlayback] = useState<{ beats: StoryBeat[]; index: number } | null>(
     null,
@@ -319,6 +320,23 @@ export function App() {
 
   const perform = () => startPerformance(committedBeats)
 
+  const startNewPainting = () => {
+    if (!resetArmed) {
+      setResetArmed(true)
+      setAgentActivity('Press “Start over?” once more to clear this shared painting.')
+      window.setTimeout(() => setResetArmed(false), 4000)
+      return
+    }
+    setResetArmed(false)
+    setPlayback(null)
+    story.reset()
+    canvas.resetPainting()
+    turnSession.setMode(turnState.mode)
+    setGuideOpen(false)
+    setAgentActivity('Fresh outline ready. You have the first color.')
+    void flushRoom('new_painting')
+  }
+
   const copyPrompt = async () => {
     try {
       await navigator.clipboard.writeText(agentInviteFor(shareUrl))
@@ -391,6 +409,16 @@ export function App() {
             onClick={() => setGuideOpen(true)}
           >
             Guide
+          </button>}
+          {hasPaint && <button
+            className={`new-painting-button${resetArmed ? ' is-armed' : ''}`}
+            type="button"
+            disabled={!roomReady}
+            onClick={startNewPainting}
+            aria-label={resetArmed ? 'Confirm starting a new painting' : 'Start a new painting'}
+          >
+            <ArrowsClockwise weight="bold" aria-hidden="true" />
+            <span>{resetArmed ? 'Start over?' : 'New painting'}</span>
           </button>}
           <button
             className="text-button advanced-button"

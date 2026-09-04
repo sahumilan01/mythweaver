@@ -277,6 +277,7 @@ button:focus-visible {
 .text-button,
 .primary-button,
 .invite-agent-button,
+.new-painting-button,
 .accept-button,
 .discard-button,
 .prompt-button,
@@ -315,6 +316,31 @@ button:focus-visible {
 .invite-agent-button:hover {
   background: var(--accent-strong);
   transform: translateY(-1px);
+}
+
+.new-painting-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--ink) 5%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.new-painting-button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
+}
+
+.new-painting-button.is-armed {
+  color: #fff;
+  background: var(--accent-strong);
 }
 
 .text-button {
@@ -1684,6 +1710,15 @@ button:disabled {
   }
 
   .invite-agent-button span {
+    display: none;
+  }
+
+  .new-painting-button {
+    width: 40px;
+    padding: 0;
+  }
+
+  .new-painting-button span {
     display: none;
   }
 }
