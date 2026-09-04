@@ -81,6 +81,7 @@ export function App() {
   const applyingRoom = useRef(false)
   const roomWriteTimer = useRef<number | null>(null)
   const roomWriteChain = useRef<Promise<void>>(Promise.resolve())
+  const lastDurableSnapshot = useRef('')
 
   const roomSnapshot = useCallback((): SharedRoomSnapshot => ({
     canvas: canvas.getSnapshot(),
@@ -88,12 +89,26 @@ export function App() {
     story: story.getState(),
   }), [canvas, story, turnSession])
 
+  const durableSnapshotFingerprint = useCallback(() => {
+    const snapshot = roomSnapshot()
+    return JSON.stringify({
+      canvas: { shapes: snapshot.canvas.shapes, fills: snapshot.canvas.fills },
+      turnSession: snapshot.turnSession,
+      story: snapshot.story,
+    })
+  }, [roomSnapshot])
+
   const applyRoomEnvelope = useCallback((envelope: RoomStateEnvelope) => {
     roomVersion.current = envelope.version
     applyingRoom.current = true
     canvas.restore(envelope.snapshot.canvas)
     turnSession.restore(envelope.snapshot.turnSession)
     story.restore(envelope.snapshot.story)
+    lastDurableSnapshot.current = JSON.stringify({
+      canvas: { shapes: envelope.snapshot.canvas.shapes, fills: envelope.snapshot.canvas.fills },
+      turnSession: envelope.snapshot.turnSession,
+      story: envelope.snapshot.story,
+    })
     applyingRoom.current = false
   }, [canvas, story, turnSession])
 
@@ -115,6 +130,7 @@ export function App() {
       try {
         const envelope = await client.write(roomVersion.current, roomSnapshot(), eventType)
         roomVersion.current = envelope.version
+        lastDurableSnapshot.current = durableSnapshotFingerprint()
       } catch (error) {
         if (error instanceof RoomRequestError && error.status === 409 && error.current) {
           applyRoomEnvelope(error.current)
@@ -124,7 +140,7 @@ export function App() {
       }
     })
     return roomWriteChain.current
-  }, [applyRoomEnvelope, roomSnapshot])
+  }, [applyRoomEnvelope, durableSnapshotFingerprint, roomSnapshot])
 
   useEffect(() => {
     let cancelled = false
@@ -149,6 +165,7 @@ export function App() {
 
         const scheduleWrite = () => {
           if (applyingRoom.current || roomWriteTimer.current !== null) return
+          if (durableSnapshotFingerprint() === lastDurableSnapshot.current) return
           roomWriteTimer.current = window.setTimeout(() => void flushRoom('canvas_changed'), 80)
         }
         unsubscribers = [canvas.subscribe(scheduleWrite), turnSession.subscribe(scheduleWrite), story.subscribe(scheduleWrite)]
@@ -164,7 +181,7 @@ export function App() {
       if (pollTimer) window.clearInterval(pollTimer)
       if (roomWriteTimer.current !== null) window.clearTimeout(roomWriteTimer.current)
     }
-  }, [applyRoomEnvelope, canvas, flushRoom, pullRoom, roomSnapshot, story, turnSession])
+  }, [applyRoomEnvelope, canvas, durableSnapshotFingerprint, flushRoom, pullRoom, roomSnapshot, story, turnSession])
 
   const startPerformance = useCallback((beats: StoryBeat[]) => {
     if (beats.length > 0) setPlayback({ beats, index: 0 })

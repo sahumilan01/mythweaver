@@ -83,8 +83,18 @@ const publicRoom = ({ tokenHash: _tokenHash, ...room }: StoredRoom) => ({
     'Read this state immediately before every paint action.',
     'Paint exactly one predefined open region with one six-digit hex color.',
     'Preserve every human fill and obey snapshot.turnSession.active.',
-    'After painting, read state again and stop when the turn returns to human.',
+    'After painting, read state again. If it is the human turn, stay connected and poll events/pending every second until the brush returns.',
+    'Continue immediately on every agent turn. Stop only when the page is complete, the person asks you to stop, or the room repeatedly fails.',
   ],
+})
+
+const durableSnapshotFingerprint = (snapshot: SharedRoomSnapshot) => JSON.stringify({
+  canvas: {
+    shapes: snapshot.canvas.shapes,
+    fills: snapshot.canvas.fills,
+  },
+  turnSession: snapshot.turnSession,
+  story: snapshot.story,
 })
 
 const parseSnapshot = (value: unknown): SharedRoomSnapshot => {
@@ -233,9 +243,18 @@ export async function handleRoomRequest(request: Request, repository: RoomReposi
       const expectedVersion = Number(input.expectedVersion)
       if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'expectedVersion must be a non-negative integer.' }, 400)
       const snapshot = parseSnapshot(input.snapshot)
+      const eventType = String(input.eventType ?? 'state')
+      if (expectedVersion > 0 && eventType === 'canvas_changed') {
+        const current = await repository.get(roomId, tokenHash)
+        if (!current) return json({ error: 'Room not found or token is invalid.' }, 401)
+        if (current.version !== expectedVersion) return json(publicRoom(current), 409)
+        if (durableSnapshotFingerprint(current.snapshot) === durableSnapshotFingerprint(snapshot)) {
+          return json(publicRoom(current))
+        }
+      }
       const written = expectedVersion === 0
         ? await repository.create(roomId, tokenHash, snapshot, 'created')
-        : await repository.write(roomId, tokenHash, expectedVersion, snapshot, String(input.eventType ?? 'state'))
+        : await repository.write(roomId, tokenHash, expectedVersion, snapshot, eventType)
       if (written) return json(publicRoom(written))
       const current = await repository.get(roomId, tokenHash)
       return current ? json(publicRoom(current), 409) : json({ error: 'Room not found or token is invalid.' }, 401)

@@ -127,4 +127,36 @@ describe('shared painting room API', () => {
     const eventBody = await events.json() as { events: Array<{ type: string }> }
     expect(eventBody.events.map((event) => event.type)).toEqual(['created', 'join', 'paint'])
   })
+
+  it('tells API agents to stay connected through the human turn', async () => {
+    const repository = createMemoryRoomRepository()
+    const roomId = 'room_persistent123456'
+    await handleRoomRequest(new Request(`https://example.test/api/rooms/${roomId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ expectedVersion: 0, snapshot: emptyRoom() }),
+    }), repository)
+
+    const response = await handleRoomRequest(new Request(`https://example.test/api/agent/${roomId}/state`, { headers }), repository)
+    const state = await response.json() as { agentInstructions: string[] }
+
+    expect(state.agentInstructions.join(' ')).toMatch(/stay connected/i)
+    expect(state.agentInstructions.join(' ')).not.toMatch(/stop when the turn returns to human/i)
+  })
+
+  it('ignores canvas_changed writes that only refresh ephemeral UI state', async () => {
+    const repository = createMemoryRoomRepository()
+    const roomId = 'room_noop1234567890'
+    const created = await handleRoomRequest(new Request(`https://example.test/api/rooms/${roomId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ expectedVersion: 0, snapshot: emptyRoom() }),
+    }), repository)
+    const first = await created.json() as { version: number; snapshot: SharedRoomSnapshot }
+    const presenceOnly = structuredClone(first.snapshot)
+    presenceOnly.canvas.agentPresence = { x: 10, y: 20, label: 'Still here', updatedAt: Date.now() }
+
+    const response = await handleRoomRequest(new Request(`https://example.test/api/rooms/${roomId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ expectedVersion: first.version, snapshot: presenceOnly, eventType: 'canvas_changed' }),
+    }), repository)
+    const unchanged = await response.json() as { version: number }
+
+    expect(unchanged.version).toBe(first.version)
+  })
 })
