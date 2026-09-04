@@ -66,6 +66,20 @@ export class RoomClient {
     return this.send(this.endpoint(), { method: 'PUT', body: JSON.stringify({ expectedVersion: 0, snapshot }) })
   }
 
+  async open(snapshot: SharedRoomSnapshot) {
+    try {
+      return await this.read()
+    } catch (error) {
+      if (!(error instanceof RoomRequestError) || error.status !== 401) throw error
+    }
+    try {
+      return await this.create(snapshot)
+    } catch (error) {
+      if (error instanceof RoomRequestError && error.status === 409 && error.current) return error.current
+      throw error
+    }
+  }
+
   write(expectedVersion: number, snapshot: SharedRoomSnapshot, eventType = 'state') {
     return this.send(this.endpoint(), { method: 'PUT', body: JSON.stringify({ expectedVersion, snapshot, eventType }) })
   }

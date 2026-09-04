@@ -139,13 +139,7 @@ export function App() {
 
     const start = async () => {
       try {
-        let envelope: RoomStateEnvelope
-        try {
-          envelope = await client.read()
-        } catch (error) {
-          if (!(error instanceof RoomRequestError) || error.status !== 401) throw error
-          envelope = await client.create(roomSnapshot())
-        }
+        const envelope = await client.open(roomSnapshot())
         if (cancelled) return
         applyRoomEnvelope(envelope)
         setRoomReady(true)

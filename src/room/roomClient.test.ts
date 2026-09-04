@@ -23,4 +23,13 @@ describe('room client', () => {
       headers: expect.objectContaining({ authorization: 'Bearer secret-token-1234567890-abcdef' }),
     }))
   })
+
+  it('adopts the winning room when two browser mounts create it together', async () => {
+    const current = { roomId: 'room_shared123456789', version: 1, snapshot: {}, updatedAt: 1 }
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'Room not found.' }), { status: 401 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(current), { status: 409 }))
+    const client = new RoomClient({ roomId: current.roomId, token: 'secret-token-1234567890-abcdef', shareUrl: 'https://example.test/' }, request as typeof fetch)
+    await expect(client.open({} as never)).resolves.toEqual(current)
+  })
 })
