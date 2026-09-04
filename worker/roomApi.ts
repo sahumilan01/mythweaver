@@ -7,6 +7,12 @@ export interface SharedRoomSnapshot {
   canvas: CanvasSnapshot
   turnSession: TurnSessionState
   story: StoryState
+  queuedAgentMove?: {
+    participant: 'agent' | 'agent-two'
+    regionId: string
+    color: string
+    reason: string
+  }
 }
 
 export interface StoredRoom {
@@ -83,7 +89,8 @@ const publicRoom = ({ tokenHash: _tokenHash, ...room }: StoredRoom) => ({
     'Read this state immediately before every paint action.',
     'Paint exactly one predefined open region with one six-digit hex color.',
     'Preserve every human fill and obey snapshot.turnSession.active.',
-    'After painting, read state again. If it is the human turn, stay connected and poll events/pending every second until the brush returns.',
+    'During a human turn, stay connected, choose an open section in advance, and POST a queue_paint action; it will apply the instant the brush returns.',
+    'After every action, read state again and poll events/pending every 250ms while waiting.',
     'Continue immediately on every agent turn. Stop only when the page is complete, the person asks you to stop, or the room repeatedly fails.',
   ],
 })
@@ -172,6 +179,27 @@ const mutateAction = (snapshot: SharedRoomSnapshot, input: Record<string, unknow
     return { snapshot: next, eventType: type }
   }
 
+  if (type === 'queue_paint') {
+    if (participant === 'human') throw new Error('Only an agent can queue a paint move.')
+    if (next.turnSession.finished || next.turnSession.active !== 'human') {
+      throw new Error(`It is ${participantName(next.turnSession.active)}'s turn; paint now instead of queueing.`)
+    }
+    const regionId = String(input.regionId ?? '')
+    const color = String(input.color ?? '')
+    const reason = typeof input.reason === 'string' ? input.reason.trim().slice(0, 180) : ''
+    if (!paintRegionIds.has(regionId as never)) throw new Error('Unknown paint region.')
+    if (!HEX_COLOR.test(color)) throw new Error('Color must be a six-digit hex value.')
+    if (next.canvas.fills[regionId as keyof typeof next.canvas.fills]) throw new Error('That section is already painted.')
+    next.queuedAgentMove = { participant, regionId, color, reason }
+    next.canvas[presenceKey] = {
+      x: PAINT_ARTIFACTS.find((item) => item.id === regionId)?.center.x ?? 600,
+      y: PAINT_ARTIFACTS.find((item) => item.id === regionId)?.center.y ?? 350,
+      label: `Ready next: ${reason || regionId}`,
+      updatedAt: now,
+    }
+    return { snapshot: next, eventType: 'agent_queued' }
+  }
+
   if (type === 'paint') {
     const regionId = String(input.regionId ?? '')
     const color = String(input.color ?? '')
@@ -197,6 +225,7 @@ const mutateAction = (snapshot: SharedRoomSnapshot, input: Record<string, unknow
     }
     next.story.revision += participant === 'human' ? 1 : 0
     next.turnSession = nextTurn(next.turnSession, participant)
+    next.queuedAgentMove = undefined
     if (Object.keys(next.canvas.fills).length >= PAINT_ARTIFACTS.length) next.turnSession.finished = true
     return { snapshot: next, eventType: 'paint' }
   }
@@ -242,14 +271,26 @@ export async function handleRoomRequest(request: Request, repository: RoomReposi
       const input = await body(request)
       const expectedVersion = Number(input.expectedVersion)
       if (!Number.isInteger(expectedVersion) || expectedVersion < 0) return json({ error: 'expectedVersion must be a non-negative integer.' }, 400)
-      const snapshot = parseSnapshot(input.snapshot)
+      let snapshot = parseSnapshot(input.snapshot)
       const eventType = String(input.eventType ?? 'state')
-      if (expectedVersion > 0 && eventType === 'canvas_changed') {
+      if (expectedVersion > 0) {
         const current = await repository.get(roomId, tokenHash)
         if (!current) return json({ error: 'Room not found or token is invalid.' }, 401)
         if (current.version !== expectedVersion) return json(publicRoom(current), 409)
-        if (durableSnapshotFingerprint(current.snapshot) === durableSnapshotFingerprint(snapshot)) {
+        if (eventType === 'canvas_changed' && durableSnapshotFingerprint(current.snapshot) === durableSnapshotFingerprint(snapshot)) {
           return json(publicRoom(current))
+        }
+        const queued = current.snapshot.queuedAgentMove
+        const humanJustPainted = snapshot.story.revision > current.snapshot.story.revision
+        if (eventType === 'canvas_changed' && queued && humanJustPainted && snapshot.turnSession.active === queued.participant) {
+          if (!snapshot.canvas.fills[queued.regionId as keyof typeof snapshot.canvas.fills]) {
+            snapshot = mutateAction(
+              { ...snapshot, queuedAgentMove: undefined },
+              { type: 'paint', ...queued },
+            ).snapshot
+          } else {
+            snapshot.queuedAgentMove = undefined
+          }
         }
       }
       const written = expectedVersion === 0

@@ -159,4 +159,33 @@ describe('shared painting room API', () => {
 
     expect(unchanged.version).toBe(first.version)
   })
+
+  it('applies a queued agent fill in the same round trip as the human move', async () => {
+    const repository = createMemoryRoomRepository()
+    const roomId = 'room_fastpair1234567'
+    const created = await handleRoomRequest(new Request(`https://example.test/api/rooms/${roomId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ expectedVersion: 0, snapshot: emptyRoom() }),
+    }), repository)
+    expect(created.status).toBe(200)
+
+    const queuedResponse = await handleRoomRequest(new Request(`https://example.test/api/agent/${roomId}/actions`, {
+      method: 'POST', headers, body: JSON.stringify({
+        type: 'queue_paint', participant: 'agent', regionId: 'river', color: '#263f98', reason: 'A cool river balances the warm moon.',
+      }),
+    }), repository)
+    const queued = await queuedResponse.json() as { version: number }
+
+    const humanMove = emptyRoom()
+    humanMove.canvas.fills.moon = { color: '#f0b343', origin: 'human' }
+    humanMove.story.revision = 1
+    humanMove.turnSession = { ...humanMove.turnSession, active: 'agent', round: 2 }
+    const pairedResponse = await handleRoomRequest(new Request(`https://example.test/api/rooms/${roomId}`, {
+      method: 'PUT', headers, body: JSON.stringify({ expectedVersion: queued.version, snapshot: humanMove, eventType: 'canvas_changed' }),
+    }), repository)
+    const paired = await pairedResponse.json() as { snapshot: SharedRoomSnapshot }
+
+    expect(paired.snapshot.canvas.fills.moon).toEqual({ color: '#f0b343', origin: 'human' })
+    expect(paired.snapshot.canvas.fills.river).toEqual({ color: '#263f98', origin: 'agent' })
+    expect(paired.snapshot.turnSession.active).toBe('human')
+  })
 })
