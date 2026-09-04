@@ -180,7 +180,9 @@ export function App() {
 
   useEffect(() => {
     const refreshPresence = () => hostedAgents.current.forEach((agentId) => canvas.refreshAgentPresence(agentId))
-    const expirePresence = () => canvas.expireAgentPresence(6000)
+    // Remote agents refresh through the room API rather than this tab's 2s loop.
+    // Keep their presence alive across the one-minute collaboration heartbeat.
+    const expirePresence = () => canvas.expireAgentPresence(120000)
     const disconnect = () => hostedAgents.current.forEach((agentId) => canvas.hideAgentPresence(agentId))
     const heartbeatTimer = window.setInterval(refreshPresence, 2000)
     const expiryTimer = window.setInterval(expirePresence, 1000)
